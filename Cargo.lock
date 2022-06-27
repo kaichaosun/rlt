@@ -3,9 +3,9 @@
 version = 3
 
 [[package]]
-name = "cli"
+name = "rlt-cli"
 version = "0.1.0"
 
 [[package]]
-name = "lib"
+name = "rlt-client"
 version = "0.1.0"
