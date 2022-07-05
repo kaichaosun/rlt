@@ -40,19 +40,20 @@ pub async fn open_tunnel(host: &str, subdomain: Option<&str>, local_port: u16) -
 
     loop {
         remote_stream.readable().await?;
-        let (mut ri, mut wi) = remote_stream.split();
-        let (mut ro, mut wo) = local_stream.split();
-        let client_to_server = async {
-            io::copy(&mut ri, &mut wo).await?;
-            wo.shutdown().await
+
+        let (mut read_remote, mut write_remote) = remote_stream.split();
+        let (mut read_local, mut write_local) = local_stream.split();
+        let proxy_to_local = async {
+            io::copy(&mut read_remote, &mut write_local).await?;
+            write_local.shutdown().await
         };
     
-        let server_to_client = async {
-            io::copy(&mut ro, &mut wi).await?;
-            wi.shutdown().await
+        let local_to_proxy = async {
+            io::copy(&mut read_local, &mut write_remote).await?;
+            write_remote.shutdown().await
         };
 
-        tokio::try_join!(client_to_server, server_to_client)?;
+        tokio::try_join!(proxy_to_local, local_to_proxy)?;
     }
 
     Ok(())
