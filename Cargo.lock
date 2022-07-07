@@ -375,6 +375,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349d5a591cd28b49e1d1037471617a32ddcda5731b99419008085f72d5a53836"
 
 [[package]]
+name = "localtunnel"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "localtunnel-cli"
+version = "0.0.1"
+dependencies = [
+ "localtunnel",
+ "tokio",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -638,26 +658,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
-]
-
-[[package]]
-name = "rlt-cli"
-version = "0.1.0"
-dependencies = [
- "rlt-client",
- "tokio",
-]
-
-[[package]]
-name = "rlt-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures-util",
- "reqwest",
- "serde",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

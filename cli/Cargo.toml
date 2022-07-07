@@ -1,10 +1,12 @@
 [package]
-name = "rlt-cli"
-version = "0.1.0"
+name = "localtunnel-cli"
+version = "0.0.1"
 edition = "2021"
+description = "A CLI to proxy with localtunnel server."
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rlt-client = { path = "../client" }
+localtunnel = { path = "../client" }
 tokio = { version = "1.19.2", features = ["full"] }

@@ -1,7 +1,9 @@
 [package]
-name = "rlt-client"
-version = "0.1.0"
+name = "localtunnel"
+version = "0.0.1"
 edition = "2021"
+description = "A client to connect with localtunnel server."
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
