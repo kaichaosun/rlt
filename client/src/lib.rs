@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -44,32 +45,34 @@ pub async fn open_tunnel(
 
     let mut framed_stream = Framed::new(remote_stream, codec);
 
+    let counter = Arc::new(Mutex::new(0));
+
     loop {
-        if let Some(message) = framed_stream.next().await {
-            println!("messages comes in: {:?}", message);
+        let _message = framed_stream.next().await;
+        // println!("messages comes in: {:?}", message);
 
-            tokio::spawn(async move {
-                handle_conn(resp.port, local_port).await
-            });
+        let mut locked_counter = counter.lock().unwrap();
+        if *locked_counter < resp.max_conn_count {
+            println!("spawn new proxy");
+            *locked_counter += 1;
 
-            println!("proxied one connection");
+            let counter2 = Arc::clone(&counter);
+            tokio::spawn(async move { handle_conn(resp.port, local_port, counter2).await });
         }
     }
-
 }
 
-async fn handle_conn(remote_port: u16, local_port: u16) -> Result<()> {
-    let remote_stream_in =
-        TcpStream::connect(format!("proxy.ad4m.dev:{}", remote_port)).await?;
+async fn handle_conn(remote_port: u16, local_port: u16, counter: Arc<Mutex<u8>>) -> Result<()> {
+    let remote_stream_in = TcpStream::connect(format!("proxy.ad4m.dev:{}", remote_port)).await?;
 
     let local_stream_in = TcpStream::connect(format!("127.0.0.1:{}", local_port)).await?;
 
-    proxy(remote_stream_in, local_stream_in).await?;
+    proxy(remote_stream_in, local_stream_in, counter).await?;
     Ok(())
 }
 
 /// Copy data mutually between two read/write streams.
-pub async fn proxy<S1, S2>(stream1: S1, stream2: S2) -> io::Result<()>
+pub async fn proxy<S1, S2>(stream1: S1, stream2: S2, counter: Arc<Mutex<u8>>) -> io::Result<()>
 where
     S1: AsyncRead + AsyncWrite + Unpin,
     S2: AsyncRead + AsyncWrite + Unpin,
@@ -80,6 +83,9 @@ where
         res = io::copy(&mut s1_read, &mut s2_write) => res,
         res = io::copy(&mut s2_read, &mut s1_write) => res,
     }?;
+    let mut locked_counter = counter.lock().unwrap();
+    *locked_counter -= 1;
+
     Ok(())
 }
 
