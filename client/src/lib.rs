@@ -1,18 +1,17 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
-use tokio_util::codec::{AnyDelimiterCodec, Framed};
+use tokio_util::codec::{Framed, LinesCodec};
 
 /// Timeout for network connections and initial protocol messages.
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Maxmium byte length for a JSON frame in the stream.
-pub const MAX_FRAME_LENGTH: usize = 256;
+pub const MAX_FRAME_LENGTH: usize = 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyResponse {
@@ -23,58 +22,49 @@ struct ProxyResponse {
 }
 
 pub async fn open_tunnel(
-    host: &str,
+    server: &str,
     subdomain: Option<&str>,
     local_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("start connect to: {}, {}", "localhost", "12000");
 
-    // connect to remote host
-
-    // connect to local port
-
-    // forward the traffic from remote host to local
-
     // Get custome domain
     let assigned_domain = subdomain.unwrap_or("?new");
-    let uri = format!("{}/{}", host, assigned_domain);
+    let uri = format!("{}/{}", server, assigned_domain);
     println!("assigned domain: {}", uri);
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
     println!("{:#?}", resp);
 
     // connect to remote host
-    let mut remote_stream = TcpStream::connect(format!("proxy.ad4m.dev:{}", resp.port)).await?;
+    let remote_stream = TcpStream::connect(format!("proxy.ad4m.dev:{}", resp.port)).await?;
+    println!("remote stream connectted");
 
-    // connect to local port
-    // let mut local_stream = TcpStream::connect(format!("127.0.0.1:{}", local_port)).await?;
-
-    let codec = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
+    // let codec = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
+    let codec = LinesCodec::new();
 
     let mut framed_stream = Framed::new(remote_stream, codec);
 
     loop {
         if let Some(message) = framed_stream.next().await {
+            println!("messages comes in: {:?}", message);
+
             tokio::spawn(async move {
                 handle_conn(resp.port, local_port).await
             });
+
+            println!("proxied one connection");
         }
     }
 
-    Ok(())
 }
 
 async fn handle_conn(remote_port: u16, local_port: u16) -> Result<()> {
-    let mut remote_stream_in = TcpStream::connect(format!("proxy.ad4m.dev:{}", remote_port)).await?;
+    let remote_stream_in =
+        TcpStream::connect(format!("proxy.ad4m.dev:{}", remote_port)).await?;
 
-    // connect to local port
-    let mut local_stream_in = TcpStream::connect(format!("127.0.0.1:{}", local_port)).await?;
+    let local_stream_in = TcpStream::connect(format!("127.0.0.1:{}", local_port)).await?;
 
-    let codec_in = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
-    let mut framed_stream_in = Framed::new(remote_stream_in, codec_in);
-
-    let parts = framed_stream_in.into_parts();
-
-    proxy(local_stream_in, parts.io).await?;
+    proxy(remote_stream_in, local_stream_in).await?;
     Ok(())
 }
 
@@ -93,13 +83,13 @@ where
     Ok(())
 }
 
-async fn connect_with_timeout(to: &str, port: u16) -> Result<TcpStream> {
-    match timeout(NETWORK_TIMEOUT, TcpStream::connect((to, port))).await {
-        Ok(res) => res,
-        Err(err) => Err(err.into()),
-    }
-    .with_context(|| format!("could not connect to {to}:{port}"))
-}
+// async fn connect_with_timeout(to: &str, port: u16) -> Result<TcpStream> {
+//     match timeout(NETWORK_TIMEOUT, TcpStream::connect((to, port))).await {
+//         Ok(res) => res,
+//         Err(err) => Err(err.into()),
+//     }
+//     .with_context(|| format!("could not connect to {to}:{port}"))
+// }
 
 #[cfg(test)]
 mod tests {
