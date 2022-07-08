@@ -1,18 +1,10 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::Result;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LinesCodec};
-
-/// Timeout for network connections and initial protocol messages.
-pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Maxmium byte length for a JSON frame in the stream.
-pub const MAX_FRAME_LENGTH: usize = 1024;
+use tokio::time::{sleep, Duration};
 
 pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
 pub const LOCAL_HOST: &str = "127.0.0.1";
@@ -40,24 +32,23 @@ pub async fn open_tunnel(
     let uri = format!("{}/{}", server, assigned_domain);
     println!("assigned domain: {}", uri);
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
-    println!("{:#?}", resp);
+    println!("{:?}", resp);
 
-    // connect to remote host
+    // Parse and get remote host
     let server_parts = server.split("//").collect::<Vec<&str>>();
     let server_host = server_parts[1];
-    let remote_stream = TcpStream::connect(format!("{}:{}", &server_host, resp.port)).await?;
-    println!("remote stream connectted");
-
-    // let codec = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
-    let codec = LinesCodec::new();
-
-    let mut framed_stream = Framed::new(remote_stream, codec);
+    
+    // TODO check the connect is failed and restart the proxy.
+    // let remote_stream = TcpStream::connect(format!("{}:{}", &server_host, resp.port)).await?;
+    // println!("remote stream connectted");
+    // let codec = LinesCodec::new();
+    // let mut framed_stream = Framed::new(remote_stream, codec);
+    // let _message = framed_stream.next().await;
 
     let counter = Arc::new(Mutex::new(0));
 
     loop {
-        let _message = framed_stream.next().await;
-        // println!("messages comes in: {:?}", message);
+        sleep(Duration::from_millis(600)).await;
 
         let mut locked_counter = counter.lock().unwrap();
         if *locked_counter < resp.max_conn_count {
@@ -76,7 +67,6 @@ pub async fn open_tunnel(
 
 async fn handle_conn(remote_host: String, remote_port: u16, local_host: String, local_port: u16, counter: Arc<Mutex<u8>>) -> Result<()> {
     let remote_stream_in = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
-
     let local_stream_in = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
 
     proxy(remote_stream_in, local_stream_in, counter).await?;
@@ -100,14 +90,6 @@ where
 
     Ok(())
 }
-
-// async fn connect_with_timeout(to: &str, port: u16) -> Result<TcpStream> {
-//     match timeout(NETWORK_TIMEOUT, TcpStream::connect((to, port))).await {
-//         Ok(res) => res,
-//         Err(err) => Err(err.into()),
-//     }
-//     .with_context(|| format!("could not connect to {to}:{port}"))
-// }
 
 #[cfg(test)]
 mod tests {

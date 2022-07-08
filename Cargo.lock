@@ -376,7 +376,7 @@ checksum = "349d5a591cd28b49e1d1037471617a32ddcda5731b99419008085f72d5a53836"
 
 [[package]]
 name = "localtunnel"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "localtunnel-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "localtunnel",
  "tokio",
