@@ -39,11 +39,6 @@ pub async fn open_tunnel(
     let server_host = server_parts[1];
     
     // TODO check the connect is failed and restart the proxy.
-    // let remote_stream = TcpStream::connect(format!("{}:{}", &server_host, resp.port)).await?;
-    // println!("remote stream connectted");
-    // let codec = LinesCodec::new();
-    // let mut framed_stream = Framed::new(remote_stream, codec);
-    // let _message = framed_stream.next().await;
 
     let counter = Arc::new(Mutex::new(0));
 
