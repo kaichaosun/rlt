@@ -14,6 +14,9 @@ pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 /// Maxmium byte length for a JSON frame in the stream.
 pub const MAX_FRAME_LENGTH: usize = 1024;
 
+pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
+pub const LOCAL_HOST: &str = "127.0.0.1";
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyResponse {
     id: String,
@@ -23,11 +26,14 @@ struct ProxyResponse {
 }
 
 pub async fn open_tunnel(
-    server: &str,
+    server: Option<&str>,
     subdomain: Option<&str>,
+    local_host: Option<&str>,
     local_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("start connect to: {}, {}", "localhost", "12000");
+    let server = server.unwrap_or(AD4M_PROXY_SERVER);
+    let local_host = local_host.unwrap_or(LOCAL_HOST);
+    println!("start connect to: {}, local port: {}", server, local_port);
 
     // Get custome domain
     let assigned_domain = subdomain.unwrap_or("?new");
@@ -37,7 +43,9 @@ pub async fn open_tunnel(
     println!("{:#?}", resp);
 
     // connect to remote host
-    let remote_stream = TcpStream::connect(format!("proxy.ad4m.dev:{}", resp.port)).await?;
+    let server_parts = server.split("//").collect::<Vec<&str>>();
+    let server_host = server_parts[1];
+    let remote_stream = TcpStream::connect(format!("{}:{}", &server_host, resp.port)).await?;
     println!("remote stream connectted");
 
     // let codec = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
@@ -56,16 +64,20 @@ pub async fn open_tunnel(
             println!("spawn new proxy");
             *locked_counter += 1;
 
+            let server_host = server_host.to_string();
+            let local_host = local_host.to_string();
             let counter2 = Arc::clone(&counter);
-            tokio::spawn(async move { handle_conn(resp.port, local_port, counter2).await });
+            tokio::spawn(async move {
+                handle_conn(server_host, resp.port, local_host, local_port, counter2).await
+            });
         }
     }
 }
 
-async fn handle_conn(remote_port: u16, local_port: u16, counter: Arc<Mutex<u8>>) -> Result<()> {
-    let remote_stream_in = TcpStream::connect(format!("proxy.ad4m.dev:{}", remote_port)).await?;
+async fn handle_conn(remote_host: String, remote_port: u16, local_host: String, local_port: u16, counter: Arc<Mutex<u8>>) -> Result<()> {
+    let remote_stream_in = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
 
-    let local_stream_in = TcpStream::connect(format!("127.0.0.1:{}", local_port)).await?;
+    let local_stream_in = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
 
     proxy(remote_stream_in, local_stream_in, counter).await?;
     Ok(())
