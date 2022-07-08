@@ -4,6 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
@@ -22,15 +24,16 @@ pub async fn open_tunnel(
     subdomain: Option<&str>,
     local_host: Option<&str>,
     local_port: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
+    handles: &mut Vec<JoinHandle<()>>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let server = server.unwrap_or(AD4M_PROXY_SERVER);
     let local_host = local_host.unwrap_or(LOCAL_HOST);
-    println!("start connect to: {}, local port: {}", server, local_port);
+    println!("Start connect to: {}, local port: {}", server, local_port);
 
     // Get custome domain
     let assigned_domain = subdomain.unwrap_or("?new");
     let uri = format!("{}/{}", server, assigned_domain);
-    println!("assigned domain: {}", uri);
+    println!("Request assign domain: {}", uri);
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
     println!("{:?}", resp);
 
@@ -40,24 +43,31 @@ pub async fn open_tunnel(
     
     // TODO check the connect is failed and restart the proxy.
 
-    let counter = Arc::new(Mutex::new(0));
-
-    loop {
-        sleep(Duration::from_millis(600)).await;
-
-        let mut locked_counter = counter.lock().unwrap();
-        if *locked_counter < resp.max_conn_count {
-            println!("spawn new proxy");
-            *locked_counter += 1;
-
-            let server_host = server_host.to_string();
-            let local_host = local_host.to_string();
-            let counter2 = Arc::clone(&counter);
-            tokio::spawn(async move {
-                handle_conn(server_host, resp.port, local_host, local_port, counter2).await
-            });
+    let server_host = server_host.to_string();
+    let local_host = local_host.to_string();
+    let handle = spawn(async move {
+        let counter = Arc::new(Mutex::new(0));
+        loop {
+            sleep(Duration::from_millis(600)).await;
+    
+            let mut locked_counter = counter.lock().unwrap();
+            if *locked_counter < resp.max_conn_count {
+                println!("spawn new proxy");
+                *locked_counter += 1;
+    
+                let server_host = server_host.clone();
+                let local_host = local_host.clone();
+                let counter2 = Arc::clone(&counter);
+                tokio::spawn(async move {
+                    handle_conn(server_host, resp.port, local_host, local_port, counter2).await
+                });
+            }
         }
-    }
+    });
+
+    handles.push(handle);
+
+    Ok(resp.url)
 }
 
 async fn handle_conn(remote_host: String, remote_port: u16, local_host: String, local_port: u16, counter: Arc<Mutex<u8>>) -> Result<()> {
