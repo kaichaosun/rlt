@@ -10,4 +10,3 @@ license = "Apache-2.0"
 [dependencies]
 localtunnel = { path = "../client" }
 tokio = { version = "1.19.2", features = ["full"] }
-futures = "0.3.21"
