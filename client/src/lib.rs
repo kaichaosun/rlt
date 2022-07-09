@@ -34,57 +34,12 @@ pub async fn open_tunnel(
     local_host: Option<&str>,
     local_port: u16,
 ) -> Result<(String, JoinHandle<()>), Box<dyn std::error::Error>> {
-    let server = server.unwrap_or(AD4M_PROXY_SERVER);
-    let local_host = local_host.unwrap_or(LOCAL_HOST);
-    println!("Start connect to: {}, local port: {}", server, local_port);
-
-    // Get custome domain
-    let assigned_domain = subdomain.unwrap_or("?new");
-    let uri = format!("{}/{}", server, assigned_domain);
-    println!("Request assign domain: {}", uri);
-    let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
-    println!("{:#?}", resp);
-
-    // Parse and get remote host
-    let server_parts = server.split("//").collect::<Vec<&str>>();
-    let server_host = server_parts[1];
+    let tunnel_info = get_tunnel_endpoint(server, subdomain).await?;
 
     // TODO check the connect is failed and restart the proxy.
-    let server_host = server_host.to_string();
-    let local_host = local_host.to_string();
-    let server_port = resp.port;
+    let handle = tunnel_to_endpoint(tunnel_info.clone(), local_host, local_port).await;
 
-    let loop_handle = tokio::spawn(async move {
-        let counter = Arc::new(Mutex::new(0));
-
-        loop {
-            sleep(Duration::from_millis(600)).await;
-
-            let mut locked_counter = counter.lock().await;
-            if *locked_counter < resp.max_conn_count {
-                println!("Create a new proxy connection.");
-                *locked_counter += 1;
-
-                let server_host = server_host.clone();
-                let local_host = local_host.clone();
-                let counter2 = Arc::clone(&counter);
-
-                tokio::spawn(async move {
-                    let result = handle_connection(
-                        server_host,
-                        server_port,
-                        local_host,
-                        local_port,
-                        counter2,
-                    )
-                    .await;
-                    println!("Connection result: {:?}", result);
-                });
-            }
-        }
-    });
-
-    Ok((resp.url, loop_handle))
+    Ok((tunnel_info.url, handle))
 }
 
 pub async fn get_tunnel_endpoint(
@@ -116,33 +71,42 @@ pub async fn tunnel_to_endpoint(
     server: TunnelServerInfo,
     local_host: Option<&str>,
     local_port: u16,
-) {
+) -> JoinHandle<()> {
     let server_host = server.host;
     let server_port = server.port;
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
 
-    let counter = Arc::new(Mutex::new(0));
+    let handle = tokio::spawn(async move {
+        let counter = Arc::new(Mutex::new(0));
 
-    loop {
-        sleep(Duration::from_millis(600)).await;
+        loop {
+            sleep(Duration::from_millis(600)).await;
 
-        let mut locked_counter = counter.lock().await;
-        if *locked_counter < server.max_conn_count {
-            println!("Create a new proxy connection.");
-            *locked_counter += 1;
+            let mut locked_counter = counter.lock().await;
+            if *locked_counter < server.max_conn_count {
+                println!("Create a new proxy connection.");
+                *locked_counter += 1;
 
-            let server_host = server_host.clone();
-            let local_host = local_host.clone();
-            let counter2 = Arc::clone(&counter);
+                let server_host = server_host.clone();
+                let local_host = local_host.clone();
+                let counter2 = Arc::clone(&counter);
 
-            tokio::spawn(async move {
-                let result =
-                    handle_connection(server_host, server_port, local_host, local_port, counter2)
-                        .await;
-                println!("Connection result: {:?}", result);
-            });
+                tokio::spawn(async move {
+                    let result = handle_connection(
+                        server_host,
+                        server_port,
+                        local_host,
+                        local_port,
+                        counter2,
+                    )
+                    .await;
+                    println!("Connection result: {:?}", result);
+                });
+            }
         }
-    }
+    });
+
+    handle
 }
 
 async fn handle_connection(
