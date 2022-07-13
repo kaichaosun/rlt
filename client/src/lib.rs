@@ -18,6 +18,7 @@ struct ProxyResponse {
     url: String,
 }
 
+/// The server detail for client to connect
 #[derive(Clone)]
 pub struct TunnelServerInfo {
     pub host: String,
@@ -41,7 +42,7 @@ pub async fn open_tunnel(
     Ok((tunnel_info.url, handle))
 }
 
-pub async fn get_tunnel_endpoint(
+async fn get_tunnel_endpoint(
     server: Option<&str>,
     subdomain: Option<&str>,
 ) -> Result<TunnelServerInfo, Box<dyn std::error::Error>> {
@@ -66,7 +67,7 @@ pub async fn get_tunnel_endpoint(
     Ok(tunnel_info)
 }
 
-pub async fn tunnel_to_endpoint(
+async fn tunnel_to_endpoint(
     server: TunnelServerInfo,
     local_host: Option<&str>,
     local_port: u16,
