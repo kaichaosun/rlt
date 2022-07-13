@@ -1,12 +1,11 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
 
 pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
 pub const LOCAL_HOST: &str = "127.0.0.1";
@@ -77,32 +76,22 @@ pub async fn tunnel_to_endpoint(
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
 
     let handle = tokio::spawn(async move {
-        let counter = Arc::new(Mutex::new(0));
+        let limit_connection = Arc::new(Semaphore::new(server.max_conn_count.into()));
 
         loop {
-            sleep(Duration::from_millis(600)).await;
+            let permit = limit_connection.clone().acquire_owned().await.unwrap();
 
-            let mut locked_counter = counter.lock().await;
-            if *locked_counter < server.max_conn_count {
+            let server_host = server_host.clone();
+            let local_host = local_host.clone();
+
+            tokio::spawn(async move {
                 println!("Create a new proxy connection.");
-                *locked_counter += 1;
+                let result =
+                    handle_connection(server_host, server_port, local_host, local_port).await;
+                println!("Connection result: {:?}", result);
 
-                let server_host = server_host.clone();
-                let local_host = local_host.clone();
-                let counter2 = Arc::clone(&counter);
-
-                tokio::spawn(async move {
-                    let result = handle_connection(
-                        server_host,
-                        server_port,
-                        local_host,
-                        local_port,
-                        counter2,
-                    )
-                    .await;
-                    println!("Connection result: {:?}", result);
-                });
-            }
+                drop(permit);
+            });
         }
     });
 
@@ -114,17 +103,16 @@ async fn handle_connection(
     remote_port: u16,
     local_host: String,
     local_port: u16,
-    counter: Arc<Mutex<u8>>,
 ) -> Result<()> {
     let remote_stream = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
     let local_stream = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
 
-    proxy(remote_stream, local_stream, counter).await?;
+    proxy(remote_stream, local_stream).await?;
     Ok(())
 }
 
 /// Copy data mutually between two read/write streams.
-async fn proxy<S1, S2>(stream1: S1, stream2: S2, counter: Arc<Mutex<u8>>) -> io::Result<()>
+async fn proxy<S1, S2>(stream1: S1, stream2: S2) -> io::Result<()>
 where
     S1: AsyncRead + AsyncWrite + Unpin,
     S2: AsyncRead + AsyncWrite + Unpin,
@@ -135,10 +123,6 @@ where
         res = io::copy(&mut s1_read, &mut s2_write) => res,
         res = io::copy(&mut s2_read, &mut s1_write) => res,
     }?;
-    let mut locked_counter = counter.lock().await;
-
-    println!("counter: {}", *locked_counter);
-    *locked_counter -= 1;
 
     Ok(())
 }
