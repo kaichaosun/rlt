@@ -1,11 +1,10 @@
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{broadcast, Semaphore};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::task::JoinHandle;
 
 pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
 pub const LOCAL_HOST: &str = "127.0.0.1";
@@ -33,13 +32,14 @@ pub async fn open_tunnel(
     subdomain: Option<&str>,
     local_host: Option<&str>,
     local_port: u16,
-) -> Result<(String, JoinHandle<()>), Box<dyn std::error::Error>> {
+    shutdown_signal: broadcast::Sender<()>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let tunnel_info = get_tunnel_endpoint(server, subdomain).await?;
 
     // TODO check the connect is failed and restart the proxy.
-    let handle = tunnel_to_endpoint(tunnel_info.clone(), local_host, local_port).await;
+    tunnel_to_endpoint(tunnel_info.clone(), local_host, local_port, shutdown_signal).await;
 
-    Ok((tunnel_info.url, handle))
+    Ok(tunnel_info.url)
 }
 
 async fn get_tunnel_endpoint(
@@ -71,32 +71,47 @@ async fn tunnel_to_endpoint(
     server: TunnelServerInfo,
     local_host: Option<&str>,
     local_port: u16,
-) -> JoinHandle<()> {
+    shutdown_signal: broadcast::Sender<()>,
+) {
     let server_host = server.host;
     let server_port = server.port;
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
 
-    let handle = tokio::spawn(async move {
-        let limit_connection = Arc::new(Semaphore::new(server.max_conn_count.into()));
+    let limit_connection = Arc::new(Semaphore::new(server.max_conn_count.into()));
 
+    let mut shutdown_receiver = shutdown_signal.subscribe();
+
+    tokio::spawn(async move {
         loop {
-            let permit = limit_connection.clone().acquire_owned().await.unwrap();
+            tokio::select! {
+                res = limit_connection.clone().acquire_owned() => {
+                    let permit = res.unwrap();
+                    let server_host = server_host.clone();
+                    let local_host = local_host.clone();
 
-            let server_host = server_host.clone();
-            let local_host = local_host.clone();
+                    let mut shutdown_receiver = shutdown_signal.subscribe();
 
-            tokio::spawn(async move {
-                println!("Create a new proxy connection.");
-                let result =
-                    handle_connection(server_host, server_port, local_host, local_port).await;
-                println!("Connection result: {:?}", result);
+                    tokio::spawn(async move {
+                        println!("Create a new proxy connection.");
+                        tokio::select! {
+                            res = handle_connection(server_host, server_port, local_host, local_port) => {
+                                println!("Connection result: {:?}", res);
+                            }
+                            _ = shutdown_receiver.recv() => {
+                                println!("Shutting down the connection immediately");
+                            }
+                        }
 
-                drop(permit);
-            });
+                        drop(permit);
+                    });
+                }
+                _ = shutdown_receiver.recv() => {
+                    println!("Shuttign down the loop immediately");
+                    return;
+                }
+            };
         }
     });
-
-    handle
 }
 
 async fn handle_connection(
