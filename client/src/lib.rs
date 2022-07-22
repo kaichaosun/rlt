@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 
 pub use tokio::sync::broadcast;
 
-pub const AD4M_PROXY_SERVER: &str = "http://proxy.ad4m.dev";
+pub const PROXY_SERVER: &str = "https://localtunnel.me";
 pub const LOCAL_HOST: &str = "127.0.0.1";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ async fn get_tunnel_endpoint(
     server: Option<&str>,
     subdomain: Option<&str>,
 ) -> Result<TunnelServerInfo, Box<dyn std::error::Error>> {
-    let server = server.unwrap_or(AD4M_PROXY_SERVER);
+    let server = server.unwrap_or(PROXY_SERVER);
     let assigned_domain = subdomain.unwrap_or("?new");
     let uri = format!("{}/{}", server, assigned_domain);
     println!("Request for assign domain: {}", uri);

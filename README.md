@@ -15,7 +15,7 @@ Use in CLI:
 ```shell
 cargo install localtunnel-cli
 
-localtunnel-cli client --host http://proxy.ad4m.dev --subdomain kaichao --port 3000
+localtunnel-cli client --host https://localtunnel.me --subdomain kaichao --port 3000
 ```
 
 Use as a Rust library:
@@ -29,7 +29,7 @@ use localtunnel::{open_tunnel, broadcast};
 
 let (notify_shutdown, _) = broadcast::channel(1);
 let result = open_tunnel(
-    Some("http://proxy.ad4m.dev"),
+    Some("https://localtunnel.me"),
     Some("kaichao"),
     Some("locallhost"),
     3000,
