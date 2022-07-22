@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use localtunnel::open_tunnel;
-use tokio::{sync::broadcast, signal};
+use localtunnel::{open_tunnel, broadcast};
+use tokio::signal;
 
 #[derive(Parser)]
 #[clap(author, version, about)]

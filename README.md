@@ -7,25 +7,38 @@ Localtunnel exposes your localhost endpoint to the world, user cases are:
 
 ## Usage
 
-CLI:
+Use in CLI:
 
 ```shell
-cargo run
+cargo install localtunnel-cli
+
+localtunnel-cli client --host http://proxy.ad4m.dev --subdomain kaichao --port 3000
 ```
 
-As a Rust library:
+Use as a Rust library:
+
+```shell
+cargo add localtunnel
+```
 
 ```Rust
+use localtunnel::{open_tunnel, broadcast};
+
+let (notify_shutdown, _) = broadcast::channel(1);
 let result = open_tunnel(
     Some("http://proxy.ad4m.dev"),
-    Some("kaichao"), 
-    None, 
-    12000,
-).await;
+    Some("kaichao"),
+    Some("locallhost"),
+    3000,
+    notify_shutdown.clone(),
+)
+.await
+.unwrap();
+
+// Shutdown the background tasks by sending a signal.
+let _ = notify_shutdown.send(());
 ```
 
 ## Resources
 
-- localtunnel: https://github.com/localtunnel/localtunnel
-- bore: https://github.com/ekzhang/bore/
-- tunnelto: https://github.com/agrinman/tunnelto
+- [localtunnel](https://github.com/localtunnel/localtunnel)
