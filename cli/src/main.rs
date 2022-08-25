@@ -21,11 +21,14 @@ enum Command {
         #[clap(long)]
         subdomain: String,
         /// The local host to expose.
-        #[clap(long, value_name = "HOST", default_value = "localhost")]
+        #[clap(long, default_value = "localhost")]
         local_host: String,
         /// The local port to expose.
         #[clap(short, long)]
         port: u16,
+        /// Max connections allowed to server.
+        #[clap(long, default_value = "10")]
+        max_conn: u8,
     },
 
     /// Starts proxy server to accept user connections and proxy setup connection.
@@ -44,6 +47,7 @@ async fn main() {
             subdomain,
             local_host,
             port,
+            max_conn,
         } => {
             let (notify_shutdown, _) = broadcast::channel(1);
             let result = open_tunnel(
@@ -52,6 +56,7 @@ async fn main() {
                 Some(&local_host),
                 port,
                 notify_shutdown.clone(),
+                max_conn,
             )
             .await
             .unwrap();

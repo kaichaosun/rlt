@@ -35,11 +35,19 @@ pub async fn open_tunnel(
     local_host: Option<&str>,
     local_port: u16,
     shutdown_signal: broadcast::Sender<()>,
+    max_conn: u8,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let tunnel_info = get_tunnel_endpoint(server, subdomain).await?;
 
     // TODO check the connect is failed and restart the proxy.
-    tunnel_to_endpoint(tunnel_info.clone(), local_host, local_port, shutdown_signal).await;
+    tunnel_to_endpoint(
+        tunnel_info.clone(),
+        local_host,
+        local_port,
+        shutdown_signal,
+        max_conn,
+    )
+    .await;
 
     Ok(tunnel_info.url)
 }
@@ -74,12 +82,15 @@ async fn tunnel_to_endpoint(
     local_host: Option<&str>,
     local_port: u16,
     shutdown_signal: broadcast::Sender<()>,
+    max_conn: u8,
 ) {
     let server_host = server.host;
     let server_port = server.port;
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
 
-    let limit_connection = Arc::new(Semaphore::new(server.max_conn_count.into()));
+    let count = std::cmp::min(server.max_conn_count, max_conn);
+    println!("Max connection count: {}", count);
+    let limit_connection = Arc::new(Semaphore::new(count.into()));
 
     let mut shutdown_receiver = shutdown_signal.subscribe();
 
