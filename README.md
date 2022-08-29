@@ -34,6 +34,7 @@ let result = open_tunnel(
     Some("locallhost"),
     3000,
     notify_shutdown.clone(),
+    10,
 )
 .await
 .unwrap();
