@@ -12,3 +12,5 @@ repository = "https://github.com/kaichaosun/rlt"
 clap = { version = "3.2.14", features = ["derive"] }
 localtunnel = { path = "../client", version = "0.0.8" }
 tokio = { version = "1.19.2", features = ["full"] }
+log = "0.4"
+env_logger = "0.9"

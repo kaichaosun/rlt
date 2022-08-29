@@ -59,10 +59,10 @@ async fn get_tunnel_endpoint(
     let server = server.unwrap_or(PROXY_SERVER);
     let assigned_domain = subdomain.unwrap_or("?new");
     let uri = format!("{}/{}", server, assigned_domain);
-    println!("Request for assign domain: {}", uri);
+    log::debug!("Request for assign domain: {}", uri);
 
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
-    println!("{:#?}", resp);
+    log::debug!("Respone from server: {:#?}", resp);
 
     let parts = server.split("//").collect::<Vec<&str>>();
     let host = parts[1];
@@ -89,7 +89,7 @@ async fn tunnel_to_endpoint(
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
 
     let count = std::cmp::min(server.max_conn_count, max_conn);
-    println!("Max connection count: {}", count);
+    log::info!("Max connection count: {}", count);
     let limit_connection = Arc::new(Semaphore::new(count.into()));
 
     let mut shutdown_receiver = shutdown_signal.subscribe();
@@ -105,13 +105,13 @@ async fn tunnel_to_endpoint(
                     let mut shutdown_receiver = shutdown_signal.subscribe();
 
                     tokio::spawn(async move {
-                        println!("Create a new proxy connection.");
+                        log::debug!("Create a new proxy connection.");
                         tokio::select! {
                             res = handle_connection(server_host, server_port, local_host, local_port) => {
-                                println!("Connection result: {:?}", res);
+                                log::debug!("Connection result: {:?}", res);
                             }
                             _ = shutdown_receiver.recv() => {
-                                println!("Shutting down the connection immediately");
+                                log::debug!("Shutting down the connection immediately");
                             }
                         }
 
@@ -119,7 +119,7 @@ async fn tunnel_to_endpoint(
                     });
                 }
                 _ = shutdown_receiver.recv() => {
-                    println!("Shuttign down the loop immediately");
+                    log::info!("Shuttign down the loop immediately");
                     return;
                 }
             };

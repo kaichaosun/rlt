@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 use localtunnel::{open_tunnel, broadcast};
 use tokio::signal;
 
+mod config;
+
 #[derive(Parser)]
 #[clap(author, version, about)]
 #[clap(propagate_version = true)]
@@ -37,7 +39,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
-    println!("Run localtunnel CLI!");
+    config::setup();
+    log::info!("Run localtunnel CLI!");
 
     let command = Cli::parse().command;
 
@@ -60,13 +63,13 @@ async fn main() {
             )
             .await
             .unwrap();
-            println!("result: {:?}", result);
+            log::info!("Tunnel url: {:?}", result);
 
             signal::ctrl_c().await.expect("failed to listen for event");
-            println!("Quit");
+            log::info!("Quit");
         }
         Command::Server {} => {
-            println!("Not implemented.")
+            log::info!("Not implemented.")
         }
     }
 }
