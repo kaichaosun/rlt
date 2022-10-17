@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use localtunnel::{open_tunnel, broadcast};
+use localtunnel_server::create;
 use tokio::signal;
 
 mod config;
@@ -34,7 +35,20 @@ enum Command {
     },
 
     /// Starts proxy server to accept user connections and proxy setup connection.
-    Server {},
+    Server {
+        /// Domain name of the proxy server, required if use subdomain like lt.example.com.
+        #[clap(long)]
+        domain: String,
+        /// The port to accept initialise proxy request.
+        #[clap(short, long, default_value = "80")]
+        port: u16,
+        /// The flag to indicate proxy over https.
+        #[clap(long, default_value = "false")]
+        secure: bool,
+        /// Maximum number of tcp sockets each client to establish at one time.
+        #[clap(long, default_value = "10")]
+        max_sockets: u8,
+    },
 }
 
 #[tokio::main]
@@ -68,8 +82,13 @@ async fn main() {
             signal::ctrl_c().await.expect("failed to listen for event");
             log::info!("Quit");
         }
-        Command::Server {} => {
-            log::info!("Not implemented.")
+        Command::Server {
+            domain,
+            port,
+            secure,
+            max_sockets,
+        } => {
+            create(domain, port, secure, max_sockets)
         }
     }
 }
