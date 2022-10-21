@@ -88,7 +88,7 @@ async fn main() {
             secure,
             max_sockets,
         } => {
-            create(domain, port, secure, max_sockets)
+            create(domain, port, secure, max_sockets).await
         }
     }
 }
