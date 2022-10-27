@@ -1,8 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, io, cell::Cell, sync::{Arc, Mutex}};
+use std::{collections::HashMap, io, sync::Mutex};
 
-use actix_web::{get, web, App, HttpServer, Responder, HttpResponse};
+use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
 use serde::{Serialize, Deserialize};
 use tokio::net::{TcpListener, TcpStream};
+use tldextract::{TldExtractor, TldOption};
 
 struct State {
     manager: Mutex<ClientManager>,
@@ -30,6 +31,22 @@ async fn proxy(endpoint: web::Path<String>, state: web::Data<State>) -> impl Res
 
 
     format!("{endpoint}!")
+}
+
+// TODO use tokio tcplistener directly, no need for authentiacation, since it's from public user requests
+#[get("/")]
+async fn request(conn: ConnectionInfo, state: web::Data<State>) -> impl Responder {
+    let host = conn.host();
+
+    let tld: TldExtractor = TldOption::default().build();
+    if let Ok(uri) = tld.extract(host) {
+        if let Some(endpoint) = uri.subdomain {
+            let manager = state.manager.lock().unwrap();
+            let client = manager.clients.get(&endpoint).unwrap();
+            let socket = &client.available_sockets[0];
+        }
+    }
+    format!("hello {host}")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,6 +123,7 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
             .service(greet)
             .service(status)
             .service(proxy)
+            .service(request)
     })
     .bind(("127.0.0.1", 8080)).unwrap()
     .run()
