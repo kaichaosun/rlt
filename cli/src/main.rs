@@ -40,7 +40,7 @@ enum Command {
         #[clap(long)]
         domain: String,
         /// The port to accept initialise proxy request.
-        #[clap(short, long, default_value = "80")]
+        #[clap(short, long, default_value = "3000")]
         port: u16,
         /// The flag to indicate proxy over https.
         #[clap(long, default_value = "false")]
