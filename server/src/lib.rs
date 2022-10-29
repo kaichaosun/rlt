@@ -1,12 +1,23 @@
-use std::{collections::HashMap, io::{ErrorKind}, sync::{Mutex, Arc}, pin::Pin, task::{Context, Poll}, cmp::min};
+// create the endpoint, proxy.threethain.dev/did-123, proxy.threethain.xyz?new
+// create a new clent manager, the manager should listen on the assigned port
+// send request to the custom domain, get client id
+// get the client manager with client id
+// client manager handle the request.
+
+use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io, mem::replace};
 
 use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
-use byteorder::{NetworkEndian, ByteOrder};
+use hyper::{upgrade::Upgraded, service::service_fn, server::conn::http1};
 use serde::{Serialize, Deserialize};
-use tokio::{net::{TcpListener, TcpStream}, io::{self, AsyncRead, ReadBuf, Error, AsyncReadExt}};
-use tokio::pin;
+use tokio::{net::{TcpListener, TcpStream}};
 use tldextract::{TldExtractor, TldOption};
-use pin_project::pin_project;
+
+use axum::{
+    body::{self, Body},
+    http::{Request, StatusCode},
+    response::{IntoResponse, Response},
+    extract::{ws::{WebSocketUpgrade, WebSocket, Message}, TypedHeader,}, headers,
+};
 
 struct State {
     manager: Arc<Mutex<ClientManager>>,
@@ -28,9 +39,11 @@ async fn status() -> impl Responder {
 }
 
 #[get("/{endpoint}")]
-async fn proxy(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
+async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
+    log::info!("Request proxy endpoint, {}", endpoint);
     let mut manager = state.manager.lock().unwrap();
-    manager.put(endpoint.to_string()).await.unwrap();
+    log::info!("get lock, {}", endpoint);
+    manager.put(endpoint.to_string()).unwrap();
 
 
     format!("{endpoint}!")
@@ -45,9 +58,11 @@ async fn request(conn: ConnectionInfo, state: web::Data<State>) -> impl Responde
     if let Ok(uri) = tld.extract(host) {
         if let Some(endpoint) = uri.subdomain {
             let manager = state.manager.lock().unwrap();
-            let client = manager.clients.get(&endpoint).unwrap();
+            let client = manager.clients.get(&endpoint).unwrap().lock().unwrap();
             let socket = &client.available_sockets[0];
         }
+    } else {
+        log::info!("error");
     }
     format!("hello {host}")
 }
@@ -64,7 +79,7 @@ struct ProxyInfo {
 }
 
 struct ClientManager {
-    clients: HashMap<String, Client>,
+    clients: HashMap<String, Arc<Mutex<Client>>>,
     tunnels: u16,
 }
 
@@ -76,11 +91,16 @@ impl ClientManager {
         }
     }
 
-    pub async fn put(&mut self, url: String) -> io::Result<()> {
+    pub fn put(&mut self, url: String) -> io::Result<()> {
         if self.clients.get(&url).is_none() {
-            let mut client = Client::new();
-            client.listen().await?;   
-            self.clients.insert(url, client );
+            let client = Arc::new(Mutex::new(Client::new()));
+        
+            self.clients.insert(url, client.clone() );
+            tokio::spawn(async move {
+                let mut client = client.lock().unwrap();
+                (*client).listen();
+            });
+            
         }
 
         Ok(())
@@ -111,6 +131,10 @@ impl Client {
 
         Ok(())
     }
+
+    pub fn take(&mut self) -> Option<TcpStream> {
+        self.available_sockets.pop()
+    }
 }
 
 // TODO proxy_port, port -> admin_port
@@ -120,43 +144,92 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
     log::info!("Create proxy server at {} {} {} {}", &domain, port, secure,  max_sockets);
 
     let manager = Arc::new(Mutex::new(ClientManager::new()));
-    
     let state = web::Data::new(State {
         manager: manager.clone(),
     });
 
+    // tokio::spawn(async move {
+    //     let router = Router::new().route("/", routing::get(|| async { "Hello, World!" }));
+
+    //     let service = tower::service_fn(move |req: Request<Body>| {
+    //         let router = router.clone();
+    //         async move {
+    //             if req.method() == Method::CONNECT {
+    //                 proxy(req).await
+    //             } else {
+    //                 router.oneshot(req).await.map_err(|err| match err {})
+    //             }
+    //         }
+    //     });
+
+    //     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+        
+    //     axum::Server::bind(&addr)
+    //         .http1_preserve_header_case(true)
+    //         .http1_title_case_headers(true)
+    //         .serve(Shared::new(service))
+    //         .await
+    //         .unwrap();
+    // });
+
+    // tokio::spawn(async move {
+    //     let app = Router::new()
+    //         // routes are matched from bottom to top, so we have to put `nest` at the
+    //         // top since it matches all routes
+    //         .route("/ws", routing::get(ws_handler));
+    //         let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+    //         log::info!("listening on {}", addr);
+    //         axum::Server::bind(&addr)
+    //             .serve(app.into_make_service())
+    //             .await
+    //             .unwrap();
+    // });
+
     tokio::spawn(async move {
-        let proxy_port = 3001; // TODO use passed in port
-        let proxy_listen_addr = format!("127.0.0.1:{proxy_port}");
-        log::info!("Listening proxy request on: {}", proxy_listen_addr);
-    
-        let listener = TcpListener::bind(proxy_listen_addr).await.unwrap();
-    
+        let addr: SocketAddr = ([127, 0, 0, 1], 3001).into();
+        log::info!("listening on {}", addr);
+        let listener = TcpListener::bind(addr).await.unwrap();
+
         loop {
-            let (mut client_stream, client_addr) = listener.accept().await.unwrap();
-    
-            let mut recording_reader = RecordingBufReader::new(&mut client_stream);
-            let reader = HandshakeRecordReader::new(&mut recording_reader);
-            pin!(reader);
-    
-            let hostname = read_sni_host_name_from_client_hello(reader).await;
-            match hostname {
-                Ok(hostname) => {
-                    let tld: TldExtractor = TldOption::default().build();
-                    if let Ok(uri) = tld.extract(&hostname) {
-                        if let Some(endpoint) = uri.subdomain {
-                            log::info!("Proxy endpoint: {}", endpoint);
-                            let manager = manager.lock().unwrap();
-                            let client = manager.clients.get(&endpoint).unwrap();
-                            let socket = &client.available_sockets[0];
+            let (stream, _) = listener.accept().await.unwrap();
+
+            log::info!("Accept proxy request");
+
+            // This is the `Service` that will handle the connection.
+            // `service_fn` is a helper to convert a function that
+            // returns a Response into a `Serive`.
+            let manager = manager.clone();
+            let service = service_fn(move |req| {
+                println!("uri ========= {}", req.uri());
+                println!("host ========= {:?}", req.headers());
+                let hostname = req.headers().get("host").unwrap().to_str().unwrap();
+                println!("hostname ========= {}", hostname);
+
+                let endpoint = extract(hostname.to_string());
+                let mut manager = manager.lock().unwrap();
+                let mut client = manager.clients.get_mut(&endpoint).unwrap().lock().unwrap();
+                let client_stream = (*client).take().unwrap();
+
+                async move {
+                    let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+                    tokio::spawn(async move {
+                        if let Err(err) = conn.await {
+                            log::error!("Connection failed: {:?}", err);
                         }
-                    }
-                },
-                Err(err) => {
-                    log::error!("Error happens: {}", err);
+                    });
+
+                    sender.send_request(req).await
                 }
-            }
-            
+            });
+
+            tokio::spawn(async move {
+                if let Err(err) = http1::Builder::new()
+                    .serve_connection(stream, service)
+                    .await
+                {
+                    log::error!("Failed to serve connection: {:?}", err);
+                }
+            });
         }
     });
 
@@ -165,7 +238,7 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
             .app_data(state.clone())
             .service(greet)
             .service(status)
-            .service(proxy)
+            .service(request_endpoint)
             .service(request)
     })
     .bind(("127.0.0.1", port)).unwrap()
@@ -174,289 +247,105 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
     .unwrap();
 }
 
-#[pin_project]
-struct RecordingBufReader<R: AsyncRead> {
-    #[pin]
-    reader: R,
-    buf: Vec<u8>,
-    read_offset: usize,
+fn extract(hostname: String) -> String {
+    // TODO regex
+    let hostname = hostname
+        .replace("http://", "")
+        .replace("https://", "")
+        .replace("ws", "")
+        .replace("wss", "");
+
+    hostname.split(".").next().unwrap().to_string()
 }
 
-const RECORDING_READER_BUF_SIZE: usize = 1 << 10; // 1 KiB
-
-impl<R: AsyncRead> RecordingBufReader<R> {
-    fn new(reader: R) -> RecordingBufReader<R> {
-        RecordingBufReader {
-            reader,
-            buf: Vec::with_capacity(RECORDING_READER_BUF_SIZE),
-            read_offset: 0,
-        }
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+) -> impl IntoResponse {
+    if let Some(TypedHeader(user_agent)) = user_agent {
+        println!("`{}` connected", user_agent.as_str());
     }
 
-    fn buf(self) -> Vec<u8> {
-        self.buf
-    }
+    ws.on_upgrade(handle_socket)
 }
 
-impl<R: AsyncRead> AsyncRead for RecordingBufReader<R> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        caller_buf: &mut ReadBuf<'_>,
-    ) -> Poll<Result<(), Error>> {
-        // if we don't have any buffered bytes, read some bytes into our buffer.
-        let mut this = self.project();
-        if *this.read_offset == this.buf.len() {
-            this.buf.reserve(RECORDING_READER_BUF_SIZE);
-            let mut read_buf = ReadBuf::uninit(this.buf.spare_capacity_mut());
-            match this.reader.as_mut().poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => {
-                    let bytes_read = read_buf.filled().len();
-                    let new_len = this.buf.len() + bytes_read;
-                    unsafe {
-                        this.buf.set_len(new_len); // lol
-                    }
+async fn handle_socket(mut socket: WebSocket) {
+    if let Some(msg) = socket.recv().await {
+        if let Ok(msg) = msg {
+            match msg {
+                Message::Text(t) => {
+                    println!("client sent str: {:?}", t);
                 }
-                rslt => return rslt,
-            };
-        }
-
-        // read from the buffered bytes into the caller's buffer.
-        let unread_bytes = &this.buf[*this.read_offset..];
-        let n = min(caller_buf.remaining(), unread_bytes.len());
-        caller_buf.put_slice(&unread_bytes[..n]);
-        *this.read_offset += n;
-        Poll::Ready(Ok(()))
-    }
-}
-
-#[pin_project]
-struct HandshakeRecordReader<R: AsyncRead> {
-    #[pin]
-    reader: R,
-    currently_reading: HandshakeRecordReaderReading,
-}
-
-impl<R: AsyncRead> HandshakeRecordReader<R> {
-    fn new(reader: R) -> HandshakeRecordReader<R> {
-        HandshakeRecordReader {
-            reader,
-            currently_reading: HandshakeRecordReaderReading::ContentType,
-        }
-    }
-}
-
-enum HandshakeRecordReaderReading {
-    ContentType,
-    MajorMinorVersion(usize),
-    RecordSize([u8; 2], usize),
-    Record(usize),
-}
-
-impl<R: AsyncRead> AsyncRead for HandshakeRecordReader<R> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        caller_buf: &mut ReadBuf<'_>,
-    ) -> Poll<Result<(), Error>> {
-        let mut this = self.project();
-        loop {
-            match this.currently_reading {
-                HandshakeRecordReaderReading::ContentType => {
-                    const CONTENT_TYPE_HANDSHAKE: u8 = 22;
-                    let mut buf = [0];
-                    let mut buf = ReadBuf::new(&mut buf[..]);
-                    match this.reader.as_mut().poll_read(cx, &mut buf) {
-                        Poll::Ready(Ok(())) if buf.filled().len() == 1 => {
-                            if buf.filled()[0] != CONTENT_TYPE_HANDSHAKE {
-                                return Poll::Ready(Err(io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    format!(
-                                        "got wrong content type (wanted {}, got {})",
-                                        CONTENT_TYPE_HANDSHAKE,
-                                        buf.filled()[0]
-                                    ),
-                                )));
-                            }
-                            *this.currently_reading =
-                                HandshakeRecordReaderReading::MajorMinorVersion(0);
-                        }
-                        rslt => return rslt,
-                    }
+                Message::Binary(_) => {
+                    println!("client sent binary data");
                 }
-
-                HandshakeRecordReaderReading::MajorMinorVersion(bytes_read) => {
-                    let mut buf = [0, 0];
-                    let mut buf = ReadBuf::new(&mut buf[..]);
-                    buf.advance(*bytes_read);
-                    match this.reader.as_mut().poll_read(cx, &mut buf) {
-                        Poll::Ready(Ok(())) => {
-                            *bytes_read = buf.filled().len();
-                            if *bytes_read == 2 {
-                                *this.currently_reading =
-                                    HandshakeRecordReaderReading::RecordSize([0, 0], 0);
-                            }
-                        }
-                        rslt => return rslt,
-                    }
+                Message::Ping(_) => {
+                    println!("socket ping");
                 }
-
-                HandshakeRecordReaderReading::RecordSize(backing_array, bytes_read) => {
-                    const MAX_RECORD_SIZE: usize = 1 << 14;
-                    let mut buf = ReadBuf::new(&mut backing_array[..]);
-                    buf.advance(*bytes_read);
-                    match this.reader.as_mut().poll_read(cx, &mut buf) {
-                        Poll::Ready(Ok(())) => {
-                            *bytes_read = buf.filled().len();
-                            if *bytes_read == 2 {
-                                let record_size = u16::from_be_bytes(*backing_array).into();
-                                if record_size > MAX_RECORD_SIZE {
-                                    return Poll::Ready(Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        format!(
-                                            "record too large ({} > {})",
-                                            record_size, MAX_RECORD_SIZE
-                                        ),
-                                    )));
-                                }
-                                *this.currently_reading =
-                                    HandshakeRecordReaderReading::Record(record_size)
-                            }
-                        }
-                        rslt => return rslt,
-                    }
+                Message::Pong(_) => {
+                    println!("socket pong");
                 }
-
-                HandshakeRecordReaderReading::Record(remaining_record_bytes) => {
-                    // We ultimately want to read record bytes into `caller_buf`, but we need to
-                    // ensure that we don't read more bytes than there are record bytes (and end
-                    // up handing the caller record header bytes). So we call `caller_buf.take()`.
-                    // Since `take` returns an independent `ReadBuf`, we have to update `caller_buf`
-                    // once we're done reading: first we call `assume_init` to assert that the
-                    // `bytes_read` bytes we read are initialized, then we call `advance` to assert
-                    // that the appropriate section of the buffer is filled.
-
-                    let mut buf = caller_buf.take(*remaining_record_bytes);
-                    let rslt = this.reader.as_mut().poll_read(cx, &mut buf);
-                    if let Poll::Ready(Ok(())) = rslt {
-                        let bytes_read = buf.filled().len();
-                        unsafe {
-                            caller_buf.assume_init(bytes_read);
-                        }
-                        caller_buf.advance(bytes_read);
-                        *remaining_record_bytes -= bytes_read;
-                        if *remaining_record_bytes == 0 {
-                            *this.currently_reading = HandshakeRecordReaderReading::ContentType;
-                        }
-                    }
-                    return rslt;
+                Message::Close(_) => {
+                    println!("client disconnected");
+                    return;
                 }
             }
+        } else {
+            println!("client disconnected");
+            return;
         }
     }
-}
 
-async fn read_sni_host_name_from_client_hello<R: AsyncRead>(
-    mut reader: Pin<&mut R>,
-) -> io::Result<String> {
-    // Handshake message type.
-    const HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 1;
-    let typ = reader.read_u8().await?;
-    if typ != HANDSHAKE_TYPE_CLIENT_HELLO {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "handshake message not a ClientHello (type {}, expected {})",
-                typ, HANDSHAKE_TYPE_CLIENT_HELLO
-            ),
-        ));
-    }
-
-    // Handshake message length.
-    let len = read_u24(reader.as_mut()).await?;
-    let reader = reader.take(len.into());
-    pin!(reader);
-
-    // ProtocolVersion (2 bytes) & random (32 bytes).
-    skip(reader.as_mut(), 34).await?;
-
-    // Session ID (u8-length vec), cipher suites (u16-length vec), compression methods (u8-length vec).
-    skip_vec_u8(reader.as_mut()).await?;
-    skip_vec_u16(reader.as_mut()).await?;
-    skip_vec_u8(reader.as_mut()).await?;
-
-    // Extensions.
-    let ext_len = reader.read_u16().await?;
-    let new_limit = min(reader.limit(), ext_len.into());
-    reader.set_limit(new_limit);
     loop {
-        // Extension type & length.
-        let ext_typ = reader.read_u16().await?;
-        let ext_len = reader.read_u16().await?;
-
-        const EXTENSION_TYPE_SNI: u16 = 0;
-        if ext_typ != EXTENSION_TYPE_SNI {
-            skip(reader.as_mut(), ext_len.into()).await?;
-            continue;
+        if socket
+            .send(Message::Text(String::from("Hi!")))
+            .await
+            .is_err()
+        {
+            println!("client disconnected");
+            return;
         }
-        let new_limit = min(reader.limit(), ext_len.into());
-        reader.set_limit(new_limit);
-
-        // ServerNameList length.
-        let snl_len = reader.read_u16().await?;
-        let new_limit = min(reader.limit(), snl_len.into());
-        reader.set_limit(new_limit);
-
-        // ServerNameList.
-        loop {
-            // NameType & length.
-            let name_typ = reader.read_u8().await?;
-
-            const NAME_TYPE_HOST_NAME: u8 = 0;
-            if name_typ != NAME_TYPE_HOST_NAME {
-                skip_vec_u16(reader.as_mut()).await?;
-                continue;
-            }
-
-            let name_len = reader.read_u16().await?;
-            let new_limit = min(reader.limit(), name_len.into());
-            reader.set_limit(new_limit);
-            let mut name_buf = vec![0; name_len.into()];
-            reader.read_exact(&mut name_buf).await?;
-            return String::from_utf8(name_buf).map_err(|err| io::Error::new(ErrorKind::InvalidData, err));
-        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }
 
-async fn skip<R: AsyncRead>(reader: Pin<&mut R>, len: u64) -> io::Result<()> {
-    let bytes_read = io::copy(&mut reader.take(len), &mut io::sink()).await?;
-    if bytes_read < len {
-        return Err(io::Error::new(ErrorKind::UnexpectedEof, format!("skip read {} < {} bytes", bytes_read, len)));
+async fn proxy(req: Request<Body>) -> Result<Response, hyper::Error> {
+    log::info!("Request: {:?}", req);
+
+    if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
+        tokio::task::spawn(async move {
+            match hyper::upgrade::on(req).await {
+                Ok(upgraded) => {
+                    if let Err(e) = tunnel(upgraded, host_addr).await {
+                        log::warn!("server io error: {}", e);
+                    };
+                }
+                Err(e) => log::warn!("upgrade error: {}", e),
+            }
+        });
+
+        Ok(Response::new(body::boxed(body::Empty::new())))
+    } else {
+        log::warn!("CONNECT host is not socket addr: {:?}", req.uri());
+        Ok((
+            StatusCode::BAD_REQUEST,
+            "CONNECT must be to a socket address",
+        )
+            .into_response())
     }
+}
+
+async fn tunnel(mut upgraded: Upgraded, addr: String) -> std::io::Result<()> {
+    let mut server = TcpStream::connect(addr).await?;
+
+    let (from_client, from_server) =
+        tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
+
+    log::info!(
+        "client wrote {} bytes and received {} bytes",
+        from_client,
+        from_server
+    );
+
     Ok(())
 }
-
-async fn skip_vec_u8<R: AsyncRead>(mut reader: Pin<&mut R>) -> io::Result<()> {
-    let sz = reader.read_u8().await?;
-    skip(reader.as_mut(), sz.into()).await
-}
-
-async fn skip_vec_u16<R: AsyncRead>(mut reader: Pin<&mut R>) -> io::Result<()> {
-    let sz = reader.read_u16().await?;
-    skip(reader.as_mut(), sz.into()).await
-}
-
-async fn read_u24<R: AsyncRead>(mut reader: Pin<&mut R>) -> io::Result<u32> {
-    let mut buf = [0; 3];
-    reader
-        .as_mut()
-        .read_exact(&mut buf)
-        .await
-        .map(|_| NetworkEndian::read_u24(&buf))
-}
-
-// create the endpoint, proxy.threethain.dev/did-123, proxy.threethain.xyz?new
-// create a new clent manager, the manager should listen on the assigned port
-// send request to the custom domain, get client id
-// get the client manager with client id
-// client manager handle the request.

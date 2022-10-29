@@ -18,3 +18,7 @@ tldextract = "0.6.0"
 sni_rs = "1.0.0"
 pin-project = "1"
 byteorder = "1"
+
+axum = { version = "0.5.17", features = ["ws", "headers"] }
+hyper = { version = "1.0.0-rc.1", features = ["full"] }
+tower = { version = "0.4", features = ["make"] }
