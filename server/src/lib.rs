@@ -7,17 +7,9 @@
 use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
 use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
-use hyper::{upgrade::Upgraded, service::service_fn, server::conn::http1};
+use hyper::{service::service_fn, server::conn::http1};
 use serde::{Serialize, Deserialize};
 use tokio::{net::{TcpListener, TcpStream}};
-use tldextract::{TldExtractor, TldOption};
-
-use axum::{
-    body::{self, Body},
-    http::{Request, StatusCode},
-    response::{IntoResponse, Response},
-    extract::{ws::{WebSocketUpgrade, WebSocket, Message}, TypedHeader,}, headers,
-};
 
 struct State {
     manager: Arc<Mutex<ClientManager>>,
@@ -59,17 +51,9 @@ async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) 
 
 // TODO use tokio tcplistener directly, no need for authentiacation, since it's from public user requests
 #[get("/")]
-async fn request(conn: ConnectionInfo, state: web::Data<State>) -> impl Responder {
+async fn request(conn: ConnectionInfo) -> impl Responder {
     let host = conn.host();
 
-    let tld: TldExtractor = TldOption::default().build();
-    if let Ok(uri) = tld.extract(host) {
-        if let Some(endpoint) = uri.subdomain {
-            log::info!("uri, {:?}", endpoint);
-        }
-    } else {
-        log::info!("error");
-    }
     format!("hello {host}")
 }
 
@@ -107,7 +91,7 @@ impl ClientManager {
             self.clients.insert(url, client.clone() );
 
             let mut client = client.lock().unwrap();
-            client.listen().await;
+            client.listen().await.unwrap();
             
         }
 
@@ -167,43 +151,6 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
     let state = web::Data::new(State {
         manager: manager.clone(),
     });
-
-    // tokio::spawn(async move {
-    //     let router = Router::new().route("/", routing::get(|| async { "Hello, World!" }));
-
-    //     let service = tower::service_fn(move |req: Request<Body>| {
-    //         let router = router.clone();
-    //         async move {
-    //             if req.method() == Method::CONNECT {
-    //                 proxy(req).await
-    //             } else {
-    //                 router.oneshot(req).await.map_err(|err| match err {})
-    //             }
-    //         }
-    //     });
-
-    //     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-        
-    //     axum::Server::bind(&addr)
-    //         .http1_preserve_header_case(true)
-    //         .http1_title_case_headers(true)
-    //         .serve(Shared::new(service))
-    //         .await
-    //         .unwrap();
-    // });
-
-    // tokio::spawn(async move {
-    //     let app = Router::new()
-    //         // routes are matched from bottom to top, so we have to put `nest` at the
-    //         // top since it matches all routes
-    //         .route("/ws", routing::get(ws_handler));
-    //         let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    //         log::info!("listening on {}", addr);
-    //         axum::Server::bind(&addr)
-    //             .serve(app.into_make_service())
-    //             .await
-    //             .unwrap();
-    // });
 
     tokio::spawn(async move {
         let addr: SocketAddr = ([127, 0, 0, 1], 3001).into();
@@ -278,94 +225,43 @@ fn extract(hostname: String) -> String {
     hostname.split(".").next().unwrap().to_string()
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    user_agent: Option<TypedHeader<headers::UserAgent>>,
-) -> impl IntoResponse {
-    if let Some(TypedHeader(user_agent)) = user_agent {
-        println!("`{}` connected", user_agent.as_str());
-    }
+// async fn _proxy(req: Request<Body>) -> Result<Response, hyper::Error> {
+//     log::info!("Request: {:?}", req);
 
-    ws.on_upgrade(handle_socket)
-}
+//     if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
+//         tokio::task::spawn(async move {
+//             match hyper::upgrade::on(req).await {
+//                 Ok(upgraded) => {
+//                     if let Err(e) = _tunnel(upgraded, host_addr).await {
+//                         log::warn!("server io error: {}", e);
+//                     };
+//                 }
+//                 Err(e) => log::warn!("upgrade error: {}", e),
+//             }
+//         });
 
-async fn handle_socket(mut socket: WebSocket) {
-    if let Some(msg) = socket.recv().await {
-        if let Ok(msg) = msg {
-            match msg {
-                Message::Text(t) => {
-                    println!("client sent str: {:?}", t);
-                }
-                Message::Binary(_) => {
-                    println!("client sent binary data");
-                }
-                Message::Ping(_) => {
-                    println!("socket ping");
-                }
-                Message::Pong(_) => {
-                    println!("socket pong");
-                }
-                Message::Close(_) => {
-                    println!("client disconnected");
-                    return;
-                }
-            }
-        } else {
-            println!("client disconnected");
-            return;
-        }
-    }
+//         Ok(Response::new(body::boxed(body::Empty::new())))
+//     } else {
+//         log::warn!("CONNECT host is not socket addr: {:?}", req.uri());
+//         Ok((
+//             StatusCode::BAD_REQUEST,
+//             "CONNECT must be to a socket address",
+//         )
+//             .into_response())
+//     }
+// }
 
-    loop {
-        if socket
-            .send(Message::Text(String::from("Hi!")))
-            .await
-            .is_err()
-        {
-            println!("client disconnected");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    }
-}
+// async fn _tunnel(mut upgraded: Upgraded, addr: String) -> std::io::Result<()> {
+//     let mut server = TcpStream::connect(addr).await?;
 
-async fn proxy(req: Request<Body>) -> Result<Response, hyper::Error> {
-    log::info!("Request: {:?}", req);
+//     let (from_client, from_server) =
+//         tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
 
-    if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
-        tokio::task::spawn(async move {
-            match hyper::upgrade::on(req).await {
-                Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, host_addr).await {
-                        log::warn!("server io error: {}", e);
-                    };
-                }
-                Err(e) => log::warn!("upgrade error: {}", e),
-            }
-        });
+//     log::info!(
+//         "client wrote {} bytes and received {} bytes",
+//         from_client,
+//         from_server
+//     );
 
-        Ok(Response::new(body::boxed(body::Empty::new())))
-    } else {
-        log::warn!("CONNECT host is not socket addr: {:?}", req.uri());
-        Ok((
-            StatusCode::BAD_REQUEST,
-            "CONNECT must be to a socket address",
-        )
-            .into_response())
-    }
-}
-
-async fn tunnel(mut upgraded: Upgraded, addr: String) -> std::io::Result<()> {
-    let mut server = TcpStream::connect(addr).await?;
-
-    let (from_client, from_server) =
-        tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
-
-    log::info!(
-        "client wrote {} bytes and received {} bytes",
-        from_client,
-        from_server
-    );
-
-    Ok(())
-}
+//     Ok(())
+// }
