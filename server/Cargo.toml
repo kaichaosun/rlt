@@ -15,3 +15,5 @@ log = "0.4"
 actix-web = "4"
 serde = { version = "1.0", features = ["derive"] }
 hyper = { version = "1.0.0-rc.1", features = ["full"] }
+http-body-util = { version = "0.1.0-rc.1" }
+hyper-tungstenite = "0.8.1"
