@@ -4,7 +4,7 @@
 // get the client manager with client id
 // client manager handle the request.
 
-use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io, mem::replace};
+use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
 use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
 use hyper::{upgrade::Upgraded, service::service_fn, server::conn::http1};
@@ -43,10 +43,18 @@ async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) 
     log::info!("Request proxy endpoint, {}", endpoint);
     let mut manager = state.manager.lock().unwrap();
     log::info!("get lock, {}", endpoint);
-    manager.put(endpoint.to_string()).unwrap();
+    manager.put(endpoint.to_string()).await.unwrap();
 
+    let info = ProxyInfo {
+        id: endpoint.to_string(),
+        port: manager.clients.get(&endpoint.to_string()).unwrap().lock().unwrap().port.unwrap(),
+        max_conn_count: 10,
+        url: format!("{}.localhost", endpoint.to_string()),
 
-    format!("{endpoint}!")
+    };
+
+    log::info!("proxy info, {:?}", info);
+    HttpResponse::Ok().json(info)
 }
 
 // TODO use tokio tcplistener directly, no need for authentiacation, since it's from public user requests
@@ -57,9 +65,7 @@ async fn request(conn: ConnectionInfo, state: web::Data<State>) -> impl Responde
     let tld: TldExtractor = TldOption::default().build();
     if let Ok(uri) = tld.extract(host) {
         if let Some(endpoint) = uri.subdomain {
-            let manager = state.manager.lock().unwrap();
-            let client = manager.clients.get(&endpoint).unwrap().lock().unwrap();
-            let socket = &client.available_sockets[0];
+            log::info!("uri, {:?}", endpoint);
         }
     } else {
         log::info!("error");
@@ -75,6 +81,9 @@ struct ApiStatus {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyInfo {
+    id: String,
+    port: u16,
+    max_conn_count: u8,
     url: String,
 }
 
@@ -91,15 +100,14 @@ impl ClientManager {
         }
     }
 
-    pub fn put(&mut self, url: String) -> io::Result<()> {
+    pub async fn put(&mut self, url: String) -> io::Result<()> {
         if self.clients.get(&url).is_none() {
             let client = Arc::new(Mutex::new(Client::new()));
         
             self.clients.insert(url, client.clone() );
-            tokio::spawn(async move {
-                let mut client = client.lock().unwrap();
-                (*client).listen();
-            });
+
+            let mut client = client.lock().unwrap();
+            client.listen().await;
             
         }
 
@@ -108,32 +116,44 @@ impl ClientManager {
 }
 
 struct Client {
-    available_sockets: Vec<TcpStream>,
+    available_sockets: Arc<Mutex<Vec<TcpStream>>>,
+    port: Option<u16>,
 }
 
 impl Client {
     pub fn new() -> Self {
         Client {
-            available_sockets: vec![],
+            available_sockets: Arc::new(Mutex::new(vec![])),
+            port: None,
         }
     }
     pub async fn listen(&mut self) -> io::Result<()> {
         // TODO port should > 1000
         let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr().unwrap().port();
+        self.port = Some(port);
 
-        match listener.accept().await {
-            Ok((socket, addr)) => {
-                println!("new client connection: {:?}", addr);
-                self.available_sockets.push(socket)
-            },
-            Err(e) => println!("Couldn't get client: {:?}", e),
-        }
+        let sockets = self.available_sockets.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((socket, addr)) => {
+                        println!("new client connection: {:?}", addr);
+                        let mut sockets = sockets.lock().unwrap();
+                        sockets.push(socket)
+                    },
+                    Err(e) => println!("Couldn't get client: {:?}", e),
+                }
+            }
+        });
 
         Ok(())
     }
 
     pub fn take(&mut self) -> Option<TcpStream> {
-        self.available_sockets.pop()
+        let mut sockets = self.available_sockets.lock().unwrap();
+        sockets.pop()
     }
 }
 

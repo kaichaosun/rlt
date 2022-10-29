@@ -20,7 +20,7 @@ struct ProxyResponse {
 }
 
 /// The server detail for client to connect
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TunnelServerInfo {
     pub host: String,
     pub port: u16,
@@ -65,7 +65,7 @@ async fn get_tunnel_endpoint(
     log::debug!("Respone from server: {:#?}", resp);
 
     let parts = server.split("//").collect::<Vec<&str>>();
-    let host = parts[1];
+    let host = parts[1].split(":").collect::<Vec<&str>>()[0];
 
     let tunnel_info = TunnelServerInfo {
         host: host.to_string(),
@@ -84,6 +84,7 @@ async fn tunnel_to_endpoint(
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
 ) {
+    log::debug!("Tunnel server info: {:?}", server);
     let server_host = server.host;
     let server_port = server.port;
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
