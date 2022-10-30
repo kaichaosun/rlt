@@ -7,7 +7,7 @@
 use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
 use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
-use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, Response, Request, upgrade::Upgraded};
+use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, Response, Request, upgrade::{Upgraded, OnUpgrade}, StatusCode};
 use serde::{Serialize, Deserialize};
 use tokio::{net::{TcpListener, TcpStream}};
 
@@ -143,7 +143,7 @@ impl Client {
 }
 
 
-async fn service_handler(req: Request<hyper::body::Incoming>, manager: Arc<Mutex<ClientManager>>) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
+async fn service_handler(mut req: Request<hyper::body::Incoming>, manager: Arc<Mutex<ClientManager>>) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
     println!("uri ========= {}", req.uri());
     println!("host ========= {:?}", req.headers());
     let hostname = req.headers().get(HOST).unwrap().to_str().unwrap();
@@ -154,7 +154,7 @@ async fn service_handler(req: Request<hyper::body::Incoming>, manager: Arc<Mutex
     log::info!("endpoint: {}", endpoint);
     let client = manager.clients.get_mut(&endpoint).unwrap();
     let mut client = client.lock().unwrap();
-    let mut client_stream = client.take().unwrap();
+    let client_stream = client.take().unwrap();
 
     if !req.headers().contains_key(UPGRADE) {
         let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
@@ -167,6 +167,7 @@ async fn service_handler(req: Request<hyper::body::Incoming>, manager: Arc<Mutex
         sender.send_request(req).await
     } else {
         // let req = Arc::new(Mutex::new(req));
+        
         // tokio::spawn(async move {
         //     match hyper::upgrade::on(req).await {
         //         Ok(mut upgraded) => {
@@ -176,19 +177,39 @@ async fn service_handler(req: Request<hyper::body::Incoming>, manager: Arc<Mutex
         //     }
         // });
 
-        // let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
-        //     tokio::spawn(async move {
-        //         if let Err(err) = conn.await {
-        //             log::error!("Connection failed: {:?}", err);
-        //         }
-        //     });
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+            tokio::spawn(async move {
+                if let Err(err) = conn.await {
+                    log::error!("Connection failed: {:?}", err);
+                }
+            });
 
-        // // let req = req.clone().lock().unwrap();
-        // sender.send_request(req).await
+        // let req = req.clone().lock().unwrap();
+        let request_upgrade_type = req.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+        let request_upgraded = req.extensions_mut().remove::<OnUpgrade>().unwrap();
 
-        let (response, websocket) = hyper_tungstenite::upgrade(request, None).unwrap();
-        
-        Ok(response)
+        let mut response = sender.send_request(req).await.unwrap();
+
+        if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            let response_upgrade_type = response.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+            if request_upgrade_type == response_upgrade_type {
+                let mut response_upgraded = response.extensions_mut().remove::<OnUpgrade>()
+                    .expect("response does not have an upgrade extension")
+                    .await.unwrap();
+
+                log::info!("Responding to a connection upgrade response");
+
+                tokio::spawn(async move {
+                    let mut request_upgraded = request_upgraded.await.expect("failed to upgrade request");
+                    tokio::io::copy_bidirectional(&mut response_upgraded, &mut request_upgraded)
+                        .await
+                        .expect("coping between upgraded connections failed");
+                });
+            }
+            Ok(response)
+        } else {
+            Ok(response)
+        }
     }
 }
 
@@ -242,9 +263,88 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
             //     }
             // });
 
+            let service = service_fn(move |mut req| {
+                println!("uri ========= {}", req.uri());
+                println!("host ========= {:?}", req.headers());
+                let hostname = req.headers().get(HOST).unwrap().to_str().unwrap();
+                println!("hostname ========= {}", hostname);
+
+                let endpoint = extract(hostname.to_string());
+                let mut manager = manager.lock().unwrap();
+                log::info!("endpoint: {}", endpoint);
+                let client = manager.clients.get_mut(&endpoint).unwrap();
+                let mut client = client.lock().unwrap();
+                let client_stream = client.take().unwrap();
+
+                async move {
+                    if !req.headers().contains_key(UPGRADE) {
+                        let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+                        tokio::spawn(async move {
+                            if let Err(err) = conn.await {
+                                log::error!("Connection failed: {:?}", err);
+                            }
+                        });
+    
+                        sender.send_request(req).await
+                    } else {
+                        // let req = Arc::new(Mutex::new(req));
+                        
+                        // tokio::spawn(async move {
+                        //     match hyper::upgrade::on(req).await {
+                        //         Ok(mut upgraded) => {
+                        //             tokio::io::copy_bidirectional(&mut upgraded, &mut client_stream).await.unwrap();
+                        //         },
+                        //         Err(e) => log::error!("Error on upgrade, {:?}", e),
+                        //     }
+                        // });
+    
+                        let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+                            tokio::spawn(async move {
+                                if let Err(err) = conn.await {
+                                    log::error!("Connection failed: {:?}", err);
+                                }
+                            });
+    
+                        let request_upgrade_type = req.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+                        let request_upgraded = req.extensions_mut().remove::<OnUpgrade>().unwrap();
+    
+                        let mut response = sender.send_request(req).await.unwrap();
+    
+                        if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+                            let response_upgrade_type = response.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+                            if request_upgrade_type == response_upgrade_type {
+                                let mut response_upgraded = response.extensions_mut().remove::<OnUpgrade>()
+                                    .expect("response does not have an upgrade extension")
+                                    .await.unwrap();
+    
+                                log::info!("Responding to a connection upgrade response");
+    
+                                tokio::spawn(async move {
+                                    let mut request_upgraded = request_upgraded.await.expect("failed to upgrade request");
+                                    tokio::io::copy_bidirectional(&mut response_upgraded, &mut request_upgraded)
+                                        .await
+                                        .expect("coping between upgraded connections failed");
+                                });
+                            }
+                            Ok(response)
+                        } else {
+                            Ok(response)
+                        }
+                    }
+                }
+            });
+
+            // tokio::spawn(async move {
+            //     if let Err(err) = http1::Builder::new()
+            //         .serve_connection(stream, service_fn(move |mut req| service_handler(req, manager)))
+            //         .await
+            //     {
+            //         log::error!("Failed to serve connection: {:?}", err);
+            //     }
+            // });
             tokio::spawn(async move {
                 if let Err(err) = http1::Builder::new()
-                    .serve_connection(stream, service_fn(move |req| service_handler(req, manager.clone())))
+                    .serve_connection(stream, service)
                     .await
                 {
                     log::error!("Failed to serve connection: {:?}", err);
