@@ -345,6 +345,7 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
             tokio::spawn(async move {
                 if let Err(err) = http1::Builder::new()
                     .serve_connection(stream, service)
+                    .with_upgrades()
                     .await
                 {
                     log::error!("Failed to serve connection: {:?}", err);
