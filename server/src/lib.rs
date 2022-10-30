@@ -1,13 +1,13 @@
-// create the endpoint, proxy.threethain.dev/did-123, proxy.threethain.xyz?new
-// create a new clent manager, the manager should listen on the assigned port
-// send request to the custom domain, get client id
-// get the client manager with client id
-// client manager handle the request.
+/// create the endpoint, proxy.threethain.dev/did-123, proxy.threethain.xyz?new
+/// create a new clent manager, the manager should listen on the assigned port
+/// send request to the custom domain, get client id
+/// get the client manager with client id
+/// client manager handle the request.
 
 use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
 use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
-use hyper::{service::service_fn, server::conn::http1};
+use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, upgrade::OnUpgrade, StatusCode};
 use serde::{Serialize, Deserialize};
 use tokio::{net::{TcpListener, TcpStream}};
 
@@ -73,14 +73,14 @@ struct ProxyInfo {
 
 struct ClientManager {
     clients: HashMap<String, Arc<Mutex<Client>>>,
-    tunnels: u16,
+    _tunnels: u16,
 }
 
 impl ClientManager {
     pub fn new() -> Self {
         ClientManager {
             clients: HashMap::new(),
-            tunnels: 0,
+            _tunnels: 0,
         }
     }
 
@@ -112,7 +112,8 @@ impl Client {
         }
     }
     pub async fn listen(&mut self) -> io::Result<()> {
-        // TODO port should > 1000
+        // TODO port should > 1000 65535 range
+        // https://github.com/rust-lang-nursery/rust-cookbook/issues/500
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr().unwrap().port();
         self.port = Some(port);
@@ -123,11 +124,11 @@ impl Client {
             loop {
                 match listener.accept().await {
                     Ok((socket, addr)) => {
-                        println!("new client connection: {:?}", addr);
+                        log::info!("new client connection: {:?}", addr);
                         let mut sockets = sockets.lock().unwrap();
                         sockets.push(socket)
                     },
-                    Err(e) => println!("Couldn't get client: {:?}", e),
+                    Err(e) => log::info!("Couldn't get client: {:?}", e),
                 }
             }
         });
@@ -141,6 +142,8 @@ impl Client {
     }
 }
 
+/// Start the proxy use low level api from hyper.
+/// Proxy endpoint request is served via actix-web.
 // TODO proxy_port, port -> admin_port
 // require_auth: bool
 // start a tcplistener on proxy port
@@ -162,36 +165,77 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
 
             log::info!("Accept proxy request");
 
+            
+            let manager = manager.clone();
+
             // This is the `Service` that will handle the connection.
             // `service_fn` is a helper to convert a function that
             // returns a Response into a `Serive`.
-            let manager = manager.clone();
-            let service = service_fn(move |req| {
-                println!("uri ========= {}", req.uri());
-                println!("host ========= {:?}", req.headers());
-                let hostname = req.headers().get("host").unwrap().to_str().unwrap();
-                println!("hostname ========= {}", hostname);
+            // TODO extract to function
+            let service = service_fn(move |mut req| {
+                log::info!("uri ========= {}", req.uri());
+                log::info!("host ========= {:?}", req.headers());
+                let hostname = req.headers().get(HOST).unwrap().to_str().unwrap();
+                log::info!("hostname ========= {}", hostname);
 
                 let endpoint = extract(hostname.to_string());
                 let mut manager = manager.lock().unwrap();
-                let mut client = manager.clients.get_mut(&endpoint).unwrap().lock().unwrap();
-                let client_stream = (*client).take().unwrap();
+                log::info!("endpoint: {}", endpoint);
+                let client = manager.clients.get_mut(&endpoint).unwrap();
+                let mut client = client.lock().unwrap();
+                let client_stream = client.take().unwrap();
 
                 async move {
-                    let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
-                    tokio::spawn(async move {
-                        if let Err(err) = conn.await {
-                            log::error!("Connection failed: {:?}", err);
+                    if !req.headers().contains_key(UPGRADE) {
+                        let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+                        tokio::spawn(async move {
+                            if let Err(err) = conn.await {
+                                log::error!("Connection failed: {:?}", err);
+                            }
+                        });
+    
+                        sender.send_request(req).await
+                    } else {
+                        let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await.unwrap();
+                            tokio::spawn(async move {
+                                if let Err(err) = conn.await {
+                                    log::error!("Connection failed: {:?}", err);
+                                }
+                            });
+    
+                        let request_upgrade_type = req.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+                        let request_upgraded = req.extensions_mut().remove::<OnUpgrade>().unwrap();
+    
+                        let mut response = sender.send_request(req).await.unwrap();
+    
+                        if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+                            let response_upgrade_type = response.headers().get(UPGRADE).unwrap().to_str().unwrap().to_string();
+                            if request_upgrade_type == response_upgrade_type {
+                                let mut response_upgraded = response.extensions_mut().remove::<OnUpgrade>()
+                                    .expect("response does not have an upgrade extension")
+                                    .await.unwrap();
+    
+                                log::info!("Responding to a connection upgrade response");
+    
+                                tokio::spawn(async move {
+                                    let mut request_upgraded = request_upgraded.await.expect("failed to upgrade request");
+                                    tokio::io::copy_bidirectional(&mut response_upgraded, &mut request_upgraded)
+                                        .await
+                                        .expect("coping between upgraded connections failed");
+                                });
+                            }
+                            Ok(response)
+                        } else {
+                            Ok(response)
                         }
-                    });
-
-                    sender.send_request(req).await
+                    }
                 }
             });
 
             tokio::spawn(async move {
                 if let Err(err) = http1::Builder::new()
                     .serve_connection(stream, service)
+                    .with_upgrades()
                     .await
                 {
                     log::error!("Failed to serve connection: {:?}", err);
@@ -224,44 +268,3 @@ fn extract(hostname: String) -> String {
 
     hostname.split(".").next().unwrap().to_string()
 }
-
-// async fn _proxy(req: Request<Body>) -> Result<Response, hyper::Error> {
-//     log::info!("Request: {:?}", req);
-
-//     if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
-//         tokio::task::spawn(async move {
-//             match hyper::upgrade::on(req).await {
-//                 Ok(upgraded) => {
-//                     if let Err(e) = _tunnel(upgraded, host_addr).await {
-//                         log::warn!("server io error: {}", e);
-//                     };
-//                 }
-//                 Err(e) => log::warn!("upgrade error: {}", e),
-//             }
-//         });
-
-//         Ok(Response::new(body::boxed(body::Empty::new())))
-//     } else {
-//         log::warn!("CONNECT host is not socket addr: {:?}", req.uri());
-//         Ok((
-//             StatusCode::BAD_REQUEST,
-//             "CONNECT must be to a socket address",
-//         )
-//             .into_response())
-//     }
-// }
-
-// async fn _tunnel(mut upgraded: Upgraded, addr: String) -> std::io::Result<()> {
-//     let mut server = TcpStream::connect(addr).await?;
-
-//     let (from_client, from_server) =
-//         tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
-
-//     log::info!(
-//         "client wrote {} bytes and received {} bytes",
-//         from_client,
-//         from_server
-//     );
-
-//     Ok(())
-// }
