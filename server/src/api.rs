@@ -18,21 +18,27 @@ pub async fn api_status() -> impl Responder {
 /// TODO add validation to the endpoint, and check query new.
 #[get("/{endpoint}")]
 pub async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
-    log::info!("Request proxy endpoint, {}", endpoint);
+    log::debug!("Request proxy endpoint, {}", endpoint);
+
     let mut manager = state.manager.lock().await;
-    log::info!("get lock, {}", endpoint);
-    manager.put(endpoint.to_string()).await.unwrap();
-
-    let info = ProxyInfo {
-        id: endpoint.to_string(),
-        port: manager.clients.get(&endpoint.to_string()).unwrap().lock().await.port.unwrap(),
-        max_conn_count: 10,
-        url: format!("{}.localhost", endpoint.to_string()),
-
-    };
-
-    log::info!("proxy info, {:?}", info);
-    HttpResponse::Ok().json(info)
+    match manager.put(endpoint.to_string()).await {
+        Ok(port) => {
+            let info = ProxyInfo {
+                id: endpoint.to_string(),
+                port,
+                max_conn_count: 10, // TODO use from server param passed in
+                url: format!("{}.localhost", endpoint.to_string()),
+        
+            };
+        
+            log::debug!("Proxy info, {:?}", info);
+            HttpResponse::Ok().json(info)
+        },
+        Err(e) => {
+            log::error!("Client manager failed to put proxy endpoint: {:?}", e);
+            return HttpResponse::InternalServerError().body(format!("Error: {:?}", e))
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

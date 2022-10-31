@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, io};
+use std::{collections::HashMap, sync::Arc, io::{self, ErrorKind}};
 
 use tokio::{net::{TcpListener, TcpStream}, sync::Mutex};
 
@@ -20,18 +20,19 @@ impl ClientManager {
         }
     }
 
-    pub async fn put(&mut self, url: String) -> io::Result<()> {
-        if self.clients.get(&url).is_none() {
-            let client = Arc::new(Mutex::new(Client::new()));
-        
-            self.clients.insert(url, client.clone() );
-
-            let mut client = client.lock().await;
-            client.listen().await.unwrap();
-            
+    pub async fn put(&mut self, url: String) -> io::Result<u16> {
+        match self.clients.get(&url) {
+            Some(client) => {
+                client.lock().await.port.ok_or(io::Error::new(ErrorKind::Other, "Empty port"))
+            },
+            None => {
+                let client = Arc::new(Mutex::new(Client::new()));
+                self.clients.insert(url, client.clone() );
+    
+                let mut client = client.lock().await;
+                client.listen().await
+            }
         }
-
-        Ok(())
     }
 }
 
@@ -47,9 +48,9 @@ impl Client {
             port: None,
         }
     }
-    pub async fn listen(&mut self) -> io::Result<()> {
+    pub async fn listen(&mut self) -> io::Result<u16> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr().unwrap().port();
+        let port = listener.local_addr()?.port();
         self.port = Some(port);
 
         let sockets = self.available_sockets.clone();
@@ -67,7 +68,7 @@ impl Client {
             }
         });
 
-        Ok(())
+        Ok(port)
     }
 
     pub async fn take(&mut self) -> Option<TcpStream> {

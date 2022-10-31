@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use localtunnel::{open_tunnel, broadcast};
-use localtunnel_server::create;
+use localtunnel_server::start;
 use tokio::signal;
 
 mod config;
@@ -92,7 +92,7 @@ async fn main() {
             max_sockets,
             proxy_port,
         } => {
-            create(domain, port, secure, max_sockets, proxy_port).await
+            start(domain, port, secure, max_sockets, proxy_port).await.unwrap()
         }
     }
 }
