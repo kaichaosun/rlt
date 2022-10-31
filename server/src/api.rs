@@ -19,13 +19,13 @@ pub async fn api_status() -> impl Responder {
 #[get("/{endpoint}")]
 pub async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
     log::info!("Request proxy endpoint, {}", endpoint);
-    let mut manager = state.manager.lock().unwrap();
+    let mut manager = state.manager.lock().await;
     log::info!("get lock, {}", endpoint);
     manager.put(endpoint.to_string()).await.unwrap();
 
     let info = ProxyInfo {
         id: endpoint.to_string(),
-        port: manager.clients.get(&endpoint.to_string()).unwrap().lock().unwrap().port.unwrap(),
+        port: manager.clients.get(&endpoint.to_string()).unwrap().lock().await.port.unwrap(),
         max_conn_count: 10,
         url: format!("{}.localhost", endpoint.to_string()),
 

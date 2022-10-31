@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::{Mutex, Arc}, io};
+use std::{collections::HashMap, sync::Arc, io};
 
-use tokio::{net::{TcpListener, TcpStream}};
+use tokio::{net::{TcpListener, TcpStream}, sync::Mutex};
 
 /// App state holds all the client connection and status info.
 pub struct State {
@@ -26,7 +26,7 @@ impl ClientManager {
         
             self.clients.insert(url, client.clone() );
 
-            let mut client = client.lock().unwrap();
+            let mut client = client.lock().await;
             client.listen().await.unwrap();
             
         }
@@ -59,7 +59,7 @@ impl Client {
                 match listener.accept().await {
                     Ok((socket, addr)) => {
                         log::info!("new client connection: {:?}", addr);
-                        let mut sockets = sockets.lock().unwrap();
+                        let mut sockets = sockets.lock().await;
                         sockets.push(socket)
                     },
                     Err(e) => log::info!("Couldn't get client: {:?}", e),
@@ -70,8 +70,8 @@ impl Client {
         Ok(())
     }
 
-    pub fn take(&mut self) -> Option<TcpStream> {
-        let mut sockets = self.available_sockets.lock().unwrap();
+    pub async fn take(&mut self) -> Option<TcpStream> {
+        let mut sockets = self.available_sockets.lock().await;
         sockets.pop()
     }
 }
