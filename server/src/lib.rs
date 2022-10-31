@@ -1,64 +1,18 @@
-/// create the endpoint, proxy.threethain.dev/did-123, proxy.threethain.xyz?new
-/// create a new clent manager, the manager should listen on the assigned port
-/// send request to the custom domain, get client id
-/// get the client manager with client id
-/// client manager handle the request.
-
+/// Start a localtunnel server,
+/// request a proxy endpoint at `domain.tld/<your-endpoint>`,
+/// user's request then proxied via `<your-endpoint>.domain.tld`.
 use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
-use actix_web::{get, web, App, HttpServer, Responder, HttpResponse};
+use actix_web::{web, App, HttpServer};
 use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, upgrade::OnUpgrade, StatusCode};
-use serde::{Serialize, Deserialize};
 use tokio::{net::{TcpListener, TcpStream}};
 
-struct State {
+use crate::api::{api_status, request_endpoint};
+
+mod api;
+
+pub struct State {
     manager: Arc<Mutex<ClientManager>>,
-}
-
-/// TODO get tunnel status from state
-#[get("/api/status")]
-async fn status() -> impl Responder {
-    let status = ApiStatus {
-        tunnels_count: 0,
-        tunels: "kaichao".to_string(),
-    };
-
-    HttpResponse::Ok().json(status)
-}
-
-/// Request proxy endpoint
-/// TODO add validation to the endpoint, and check query new.
-#[get("/{endpoint}")]
-async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
-    log::info!("Request proxy endpoint, {}", endpoint);
-    let mut manager = state.manager.lock().unwrap();
-    log::info!("get lock, {}", endpoint);
-    manager.put(endpoint.to_string()).await.unwrap();
-
-    let info = ProxyInfo {
-        id: endpoint.to_string(),
-        port: manager.clients.get(&endpoint.to_string()).unwrap().lock().unwrap().port.unwrap(),
-        max_conn_count: 10,
-        url: format!("{}.localhost", endpoint.to_string()),
-
-    };
-
-    log::info!("proxy info, {:?}", info);
-    HttpResponse::Ok().json(info)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ApiStatus {
-    tunnels_count: u16,
-    tunels: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ProxyInfo {
-    id: String,
-    port: u16,
-    max_conn_count: u8,
-    url: String,
 }
 
 struct ClientManager {
@@ -102,8 +56,6 @@ impl Client {
         }
     }
     pub async fn listen(&mut self) -> io::Result<()> {
-        // TODO port should > 1000 65535 range
-        // https://github.com/rust-lang-nursery/rust-cookbook/issues/500
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr().unwrap().port();
         self.port = Some(port);
@@ -236,7 +188,7 @@ pub async fn create(domain: String, api_port: u16, secure: bool, max_sockets: u8
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
-            .service(status)
+            .service(api_status)
             .service(request_endpoint)
     })
     .bind(("127.0.0.1", api_port)).unwrap()
