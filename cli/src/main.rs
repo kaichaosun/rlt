@@ -39,7 +39,7 @@ enum Command {
         /// Domain name of the proxy server, required if use subdomain like lt.example.com.
         #[clap(long)]
         domain: String,
-        /// The port to accept initialise proxy request.
+        /// The port to accept initialize proxy endpoint.
         #[clap(short, long, default_value = "3000")]
         port: u16,
         /// The flag to indicate proxy over https.
@@ -48,6 +48,9 @@ enum Command {
         /// Maximum number of tcp sockets each client to establish at one time.
         #[clap(long, default_value = "10")]
         max_sockets: u8,
+        /// The port to accept user request for proxying.
+        #[clap(long, default_value = "3001")]
+        proxy_port: u16,
     },
 }
 
@@ -87,8 +90,9 @@ async fn main() {
             port,
             secure,
             max_sockets,
+            proxy_port,
         } => {
-            create(domain, port, secure, max_sockets).await
+            create(domain, port, secure, max_sockets, proxy_port).await
         }
     }
 }

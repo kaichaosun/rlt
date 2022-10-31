@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
 
-use actix_web::{get, web, App, HttpServer, Responder, HttpResponse, dev::ConnectionInfo};
+use actix_web::{get, web, App, HttpServer, Responder, HttpResponse};
 use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, upgrade::OnUpgrade, StatusCode};
 use serde::{Serialize, Deserialize};
 use tokio::{net::{TcpListener, TcpStream}};
@@ -15,21 +15,19 @@ struct State {
     manager: Arc<Mutex<ClientManager>>,
 }
 
-#[get("/hello/{name}")]
-async fn greet(name: web::Path<String>) -> impl Responder {
-    format!("Hello {name}!")
-}
-
+/// TODO get tunnel status from state
 #[get("/api/status")]
 async fn status() -> impl Responder {
     let status = ApiStatus {
-        tunnels_count: 10,
+        tunnels_count: 0,
         tunels: "kaichao".to_string(),
     };
 
     HttpResponse::Ok().json(status)
 }
 
+/// Request proxy endpoint
+/// TODO add validation to the endpoint, and check query new.
 #[get("/{endpoint}")]
 async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
     log::info!("Request proxy endpoint, {}", endpoint);
@@ -47,14 +45,6 @@ async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) 
 
     log::info!("proxy info, {:?}", info);
     HttpResponse::Ok().json(info)
-}
-
-// TODO use tokio tcplistener directly, no need for authentiacation, since it's from public user requests
-#[get("/")]
-async fn request(conn: ConnectionInfo) -> impl Responder {
-    let host = conn.host();
-
-    format!("hello {host}")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -144,11 +134,10 @@ impl Client {
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
-// TODO proxy_port, port -> admin_port
-// require_auth: bool
-// start a tcplistener on proxy port
-pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
-    log::info!("Create proxy server at {} {} {} {}", &domain, port, secure,  max_sockets);
+// TODO: add require_auth: bool
+pub async fn create(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16) {
+    log::info!("Listening api server at {} {}", &domain, api_port);
+    log::info!("Create proxy server at {} {}, options: {} {}", &domain, proxy_port, secure,  max_sockets);
 
     let manager = Arc::new(Mutex::new(ClientManager::new()));
     let state = web::Data::new(State {
@@ -156,7 +145,7 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
     });
 
     tokio::spawn(async move {
-        let addr: SocketAddr = ([127, 0, 0, 1], 3001).into();
+        let addr: SocketAddr = ([127, 0, 0, 1], proxy_port).into();
         log::info!("listening on {}", addr);
         let listener = TcpListener::bind(addr).await.unwrap();
 
@@ -247,12 +236,10 @@ pub async fn create(domain: String, port: u16, secure: bool, max_sockets: u8) {
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
-            .service(greet)
             .service(status)
             .service(request_endpoint)
-            .service(request)
     })
-    .bind(("127.0.0.1", port)).unwrap()
+    .bind(("127.0.0.1", api_port)).unwrap()
     .run()
     .await
     .unwrap();
