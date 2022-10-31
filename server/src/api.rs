@@ -1,7 +1,7 @@
 use actix_web::{get, web, Responder, HttpResponse};
 use serde::{Serialize, Deserialize};
 
-use crate::State;
+use crate::state::State;
 
 /// TODO get tunnel status from state
 #[get("/api/status")]

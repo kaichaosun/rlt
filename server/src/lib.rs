@@ -1,88 +1,17 @@
 /// Start a localtunnel server,
 /// request a proxy endpoint at `domain.tld/<your-endpoint>`,
 /// user's request then proxied via `<your-endpoint>.domain.tld`.
-use std::{collections::HashMap, sync::{Mutex, Arc}, net::SocketAddr, io};
+use std::{sync::{Mutex, Arc}, net::SocketAddr};
 
 use actix_web::{web, App, HttpServer};
 use hyper::{service::service_fn, server::conn::http1, header::{UPGRADE, HOST}, upgrade::OnUpgrade, StatusCode};
-use tokio::{net::{TcpListener, TcpStream}};
+use tokio::net::TcpListener;
 
 use crate::api::{api_status, request_endpoint};
+use crate::state::{State, ClientManager};
 
 mod api;
-
-pub struct State {
-    manager: Arc<Mutex<ClientManager>>,
-}
-
-struct ClientManager {
-    clients: HashMap<String, Arc<Mutex<Client>>>,
-    _tunnels: u16,
-}
-
-impl ClientManager {
-    pub fn new() -> Self {
-        ClientManager {
-            clients: HashMap::new(),
-            _tunnels: 0,
-        }
-    }
-
-    pub async fn put(&mut self, url: String) -> io::Result<()> {
-        if self.clients.get(&url).is_none() {
-            let client = Arc::new(Mutex::new(Client::new()));
-        
-            self.clients.insert(url, client.clone() );
-
-            let mut client = client.lock().unwrap();
-            client.listen().await.unwrap();
-            
-        }
-
-        Ok(())
-    }
-}
-
-struct Client {
-    available_sockets: Arc<Mutex<Vec<TcpStream>>>,
-    port: Option<u16>,
-}
-
-impl Client {
-    pub fn new() -> Self {
-        Client {
-            available_sockets: Arc::new(Mutex::new(vec![])),
-            port: None,
-        }
-    }
-    pub async fn listen(&mut self) -> io::Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr().unwrap().port();
-        self.port = Some(port);
-
-        let sockets = self.available_sockets.clone();
-
-        tokio::spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((socket, addr)) => {
-                        log::info!("new client connection: {:?}", addr);
-                        let mut sockets = sockets.lock().unwrap();
-                        sockets.push(socket)
-                    },
-                    Err(e) => log::info!("Couldn't get client: {:?}", e),
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    pub fn take(&mut self) -> Option<TcpStream> {
-        let mut sockets = self.available_sockets.lock().unwrap();
-        sockets.pop()
-    }
-}
+mod state;
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
