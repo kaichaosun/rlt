@@ -1,13 +1,19 @@
 /// Start a localtunnel server,
 /// request a proxy endpoint at `domain.tld/<your-endpoint>`,
 /// user's request then proxied via `<your-endpoint>.domain.tld`.
+
+#[macro_use]
+extern crate lazy_static;
+
 use std::{sync::Arc, net::SocketAddr, io};
 
 use actix_web::{web, App, HttpServer};
 use hyper::{service::service_fn, server::conn::http1};
 use tokio::{net::TcpListener, sync::Mutex};
+use dotenv::dotenv;
 
 use crate::api::{api_status, request_endpoint};
+use crate::config::Config;
 use crate::state::{State, ClientManager};
 use crate::proxy::proxy_handler;
 
@@ -15,6 +21,14 @@ mod api;
 mod state;
 mod proxy;
 mod auth;
+mod config;
+
+lazy_static! {
+    static ref CONFIG: Config = {
+        dotenv().ok();
+        envy::from_env::<Config>().unwrap()
+    };
+}
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.

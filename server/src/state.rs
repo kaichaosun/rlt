@@ -58,6 +58,7 @@ impl Client {
         let sockets = self.available_sockets.clone();
 
         tokio::spawn(async move {
+            // TODO max_sockets limit
             loop {
                 match listener.accept().await {
                     Ok((socket, addr)) => {

@@ -2,7 +2,7 @@ use actix_web::{get, web, Responder, HttpResponse};
 use serde::{Serialize, Deserialize};
 
 use crate::state::State;
-use crate::auth::Auth;
+use crate::auth::{Auth, CfWorkerStore};
 
 /// TODO get tunnel status from state
 #[get("/api/status")]
@@ -22,7 +22,7 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
     log::debug!("Request proxy endpoint, {}", endpoint);
 
     if state.require_auth {
-        if !().credential_is_valid(&info.token, &endpoint) {
+        if !CfWorkerStore.credential_is_valid(&info.token, &endpoint) {
             return HttpResponse::BadRequest().body(format!("Error: credential is not valid."))
         }
     }
