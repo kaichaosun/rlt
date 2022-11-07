@@ -64,8 +64,12 @@ async fn get_tunnel_endpoint(
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
     log::debug!("Respone from server: {:#?}", resp);
 
-    let parts = server.split("//").collect::<Vec<&str>>();
-    let host = parts[1].split(":").collect::<Vec<&str>>()[0];
+    let parts = resp.url.split("//").collect::<Vec<&str>>();
+    let mut host = parts[1].split(":").collect::<Vec<&str>>()[0];
+    host = match host.split_once(".") {
+        Some((_, base)) => base,
+        None => host,
+    };
 
     let tunnel_info = TunnelServerInfo {
         host: host.to_string(),
