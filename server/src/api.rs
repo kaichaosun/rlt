@@ -26,9 +26,8 @@ pub async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<Stat
             let info = ProxyInfo {
                 id: endpoint.to_string(),
                 port,
-                max_conn_count: 10, // TODO use from server param passed in
+                max_conn_count: state.max_sockets,
                 url: format!("{}.localhost", endpoint.to_string()),
-        
             };
         
             log::debug!("Proxy info, {:?}", info);

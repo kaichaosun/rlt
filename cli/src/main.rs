@@ -51,6 +51,8 @@ enum Command {
         /// The port to accept user request for proxying.
         #[clap(long, default_value = "3001")]
         proxy_port: u16,
+        #[clap(long, default_value = "false")]
+        require_auth: bool,
     },
 }
 
@@ -91,8 +93,9 @@ async fn main() {
             secure,
             max_sockets,
             proxy_port,
+            require_auth,
         } => {
-            start(domain, port, secure, max_sockets, proxy_port).await.unwrap()
+            start(domain, port, secure, max_sockets, proxy_port, require_auth).await.unwrap()
         }
     }
 }

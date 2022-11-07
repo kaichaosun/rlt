@@ -17,14 +17,15 @@ mod proxy;
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
-// TODO: add require_auth: bool
-pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16) -> io::Result<()> {
+pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16, require_auth: bool) -> io::Result<()> {
     log::info!("Api server listens at {} {}", &domain, api_port);
     log::info!("Start proxy server at {} {}, options: {} {}", &domain, proxy_port, secure,  max_sockets);
 
     let manager = Arc::new(Mutex::new(ClientManager::new()));
     let api_state = web::Data::new(State {
         manager: manager.clone(),
+        max_sockets,
+        require_auth,
     });
 
     let proxy_addr: SocketAddr = ([127, 0, 0, 1], proxy_port).into();

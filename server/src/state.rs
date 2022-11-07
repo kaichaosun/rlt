@@ -5,6 +5,8 @@ use tokio::{net::{TcpListener, TcpStream}, sync::Mutex};
 /// App state holds all the client connection and status info.
 pub struct State {
     pub manager: Arc<Mutex<ClientManager>>,
+    pub max_sockets: u8,
+    pub require_auth: bool,
 }
 
 pub struct ClientManager {
