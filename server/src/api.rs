@@ -2,6 +2,7 @@ use actix_web::{get, web, Responder, HttpResponse};
 use serde::{Serialize, Deserialize};
 
 use crate::state::State;
+use crate::auth::Auth;
 
 /// TODO get tunnel status from state
 #[get("/api/status")]
@@ -17,8 +18,14 @@ pub async fn api_status() -> impl Responder {
 /// Request proxy endpoint
 /// TODO add validation to the endpoint, and check query new.
 #[get("/{endpoint}")]
-pub async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<State>) -> impl Responder {
+pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<AuthInfo>, state: web::Data<State>) -> impl Responder {
     log::debug!("Request proxy endpoint, {}", endpoint);
+
+    if state.require_auth {
+        if !().credential_is_valid(&info.token, &endpoint) {
+            return HttpResponse::BadRequest().body(format!("Error: credential is not valid."))
+        }
+    }
 
     let mut manager = state.manager.lock().await;
     match manager.put(endpoint.to_string()).await {
@@ -38,6 +45,11 @@ pub async fn request_endpoint(endpoint: web::Path<String>, state: web::Data<Stat
             return HttpResponse::InternalServerError().body(format!("Error: {:?}", e))
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthInfo {
+    token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

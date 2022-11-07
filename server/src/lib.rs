@@ -14,6 +14,7 @@ use crate::proxy::proxy_handler;
 mod api;
 mod state;
 mod proxy;
+mod auth;
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
