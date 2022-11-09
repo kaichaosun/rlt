@@ -59,6 +59,7 @@ impl Client {
 
         tokio::spawn(async move {
             // TODO max_sockets limit
+            // TODO check client is authenticated for the port
             loop {
                 match listener.accept().await {
                     Ok((socket, addr)) => {
