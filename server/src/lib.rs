@@ -5,12 +5,13 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::{sync::Arc, net::SocketAddr, io};
+use std::{sync::Arc, net::SocketAddr};
 
 use actix_web::{web, App, HttpServer};
 use hyper::{service::service_fn, server::conn::http1};
 use tokio::{net::TcpListener, sync::Mutex};
 use dotenv::dotenv;
+use anyhow::Result;
 
 use crate::api::{api_status, request_endpoint};
 use crate::config::Config;
@@ -22,17 +23,18 @@ mod state;
 mod proxy;
 mod auth;
 mod config;
+mod error;
 
 lazy_static! {
     static ref CONFIG: Config = {
         dotenv().ok();
-        envy::from_env::<Config>().unwrap()
+        envy::from_env::<Config>().unwrap_or(Config::default())
     };
 }
 
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
-pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16, require_auth: bool) -> io::Result<()> {
+pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16, require_auth: bool) -> Result<()> {
     log::info!("Api server listens at {} {}", &domain, api_port);
     log::info!("Start proxy server at {} {}, options: {} {}", &domain, proxy_port, secure,  max_sockets);
 

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Config {
     pub cloudflare_account: Option<String>,
     pub cloudflare_namespace: Option<String>,

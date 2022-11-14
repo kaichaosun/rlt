@@ -22,7 +22,7 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
     log::debug!("Request proxy endpoint, {}", endpoint);
 
     if state.require_auth {
-        if !CfWorkerStore.credential_is_valid(&info.token, &endpoint) {
+        if !CfWorkerStore.credential_is_valid(&info.credential, &endpoint) {
             return HttpResponse::BadRequest().body(format!("Error: credential is not valid."))
         }
     }
@@ -49,7 +49,7 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
 
 #[derive(Debug, Deserialize)]
 pub struct AuthInfo {
-    token: String,
+    credential: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
