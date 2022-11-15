@@ -895,6 +895,7 @@ dependencies = [
 name = "localtunnel-cli"
 version = "0.0.3"
 dependencies = [
+ "anyhow",
  "clap",
  "env_logger",
  "localtunnel",

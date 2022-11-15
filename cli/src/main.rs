@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use localtunnel::{open_tunnel, broadcast};
 use localtunnel_server::start;
 use tokio::signal;
+use anyhow::Result;
 
 mod config;
 
@@ -32,6 +33,8 @@ enum Command {
         /// Max connections allowed to server.
         #[clap(long, default_value = "10")]
         max_conn: u8,
+        #[clap(long)]
+        credential: Option<String>,
     },
 
     /// Starts proxy server to accept user connections and proxy setup connection.
@@ -43,7 +46,7 @@ enum Command {
         #[clap(short, long, default_value = "3000")]
         port: u16,
         /// The flag to indicate proxy over https.
-        #[clap(long, default_value = "false")]
+        #[clap(long)]
         secure: bool,
         /// Maximum number of tcp sockets each client to establish at one time.
         #[clap(long, default_value = "10")]
@@ -51,13 +54,13 @@ enum Command {
         /// The port to accept user request for proxying.
         #[clap(long, default_value = "3001")]
         proxy_port: u16,
-        #[clap(long, default_value = "false")]
+        #[clap(long)]
         require_auth: bool,
     },
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     config::setup();
     log::info!("Run localtunnel CLI!");
 
@@ -70,6 +73,7 @@ async fn main() {
             local_host,
             port,
             max_conn,
+            credential,
         } => {
             let (notify_shutdown, _) = broadcast::channel(1);
             let result = open_tunnel(
@@ -79,12 +83,12 @@ async fn main() {
                 port,
                 notify_shutdown.clone(),
                 max_conn,
+                credential
             )
-            .await
-            .unwrap();
+            .await?;
             log::info!("Tunnel url: {:?}", result);
 
-            signal::ctrl_c().await.expect("failed to listen for event");
+            signal::ctrl_c().await?;
             log::info!("Quit");
         }
         Command::Server {
@@ -95,7 +99,9 @@ async fn main() {
             proxy_port,
             require_auth,
         } => {
-            start(domain, port, secure, max_sockets, proxy_port, require_auth).await.unwrap()
+            start(domain, port, secure, max_sockets, proxy_port, require_auth).await?;
         }
     }
+
+    Ok(())
 }

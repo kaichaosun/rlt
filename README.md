@@ -35,9 +35,7 @@ let result = open_tunnel(
     3000,
     notify_shutdown.clone(),
     10,
-)
-.await
-.unwrap();
+).await;
 
 // Shutdown the background tasks by sending a signal.
 let _ = notify_shutdown.send(());

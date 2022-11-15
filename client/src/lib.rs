@@ -36,8 +36,9 @@ pub async fn open_tunnel(
     local_port: u16,
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let tunnel_info = get_tunnel_endpoint(server, subdomain).await?;
+    credential: Option<String>,
+) -> Result<String> {
+    let tunnel_info = get_tunnel_endpoint(server, subdomain, credential).await?;
 
     // TODO check the connect is failed and restart the proxy.
     tunnel_to_endpoint(
@@ -55,10 +56,14 @@ pub async fn open_tunnel(
 async fn get_tunnel_endpoint(
     server: Option<&str>,
     subdomain: Option<&str>,
-) -> Result<TunnelServerInfo, Box<dyn std::error::Error>> {
+    credential: Option<String>,
+) -> Result<TunnelServerInfo> {
     let server = server.unwrap_or(PROXY_SERVER);
     let assigned_domain = subdomain.unwrap_or("?new");
-    let uri = format!("{}/{}", server, assigned_domain);
+    let mut uri = format!("{}/{}", server, assigned_domain);
+    if let Some(credential) = credential {
+        uri = format!("{}?credential={}", uri, credential);
+    }
     log::debug!("Request for assign domain: {}", uri);
 
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
@@ -104,7 +109,13 @@ async fn tunnel_to_endpoint(
             // TODO sleep exponentially if connection to remote port and local port failed
             tokio::select! {
                 res = limit_connection.clone().acquire_owned() => {
-                    let permit = res.unwrap();
+                    let permit = match res {
+                        Ok(permit) => permit,
+                        Err(err) => {
+                            log::error!("Acquire limit connection failed: {:?}", err);
+                            return;
+                        },
+                    };
                     let server_host = server_host.clone();
                     let local_host = local_host.clone();
 

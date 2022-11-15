@@ -1,23 +1,26 @@
+use anyhow::Result;
+
 use crate::CONFIG;
+use crate::error::ServerError;
 
 pub trait Auth {
-    fn credential_is_valid(&self, credential: &str, value: &str) -> bool;
+    fn credential_is_valid(&self, credential: &str, value: &str) -> Result<bool>;
 }
 
 impl Auth for () {
-    fn credential_is_valid(&self, _credential: &str, _value: &str) -> bool {
-        true
+    fn credential_is_valid(&self, _credential: &str, _value: &str) -> Result<bool> {
+        Ok(true)
     }
 }
 
 pub struct CfWorkerStore;
 
 impl Auth for CfWorkerStore {
-    fn credential_is_valid(&self, credential: &str, value: &str) -> bool {
-        let account = CONFIG.cloudflare_account.clone().unwrap();
-        let namespace = CONFIG.cloudflare_namespace.clone().unwrap();
-        let email = CONFIG.cloudflare_auth_email.clone().unwrap();
-        let key = CONFIG.cloudflare_auth_key.clone().unwrap();
+    fn credential_is_valid(&self, credential: &str, value: &str) -> Result<bool> {
+        let account = CONFIG.cloudflare_account.clone().ok_or(ServerError::InvalidConfig)?;
+        let namespace = CONFIG.cloudflare_namespace.clone().ok_or(ServerError::InvalidConfig)?;
+        let email = CONFIG.cloudflare_auth_email.clone().ok_or(ServerError::InvalidConfig)?;
+        let key = CONFIG.cloudflare_auth_key.clone().ok_or(ServerError::InvalidConfig)?;
 
         let client = reqwest::blocking::Client::new();
         let resp = client.get(
@@ -27,12 +30,10 @@ impl Auth for CfWorkerStore {
             ))
             .header("X-Auth-Email", email)
             .header("X-Auth-Key", key)
-            .send()
-            .unwrap()
-            .text()
-            .unwrap();
+            .send()?
+            .text()?;
         log::info!("{:#?}", resp);
 
-        credential == resp
+        Ok(credential == resp)
     }
 }

@@ -4,7 +4,9 @@ use thiserror::Error;
 pub enum ServerError {
     #[error("Must contain host header")]
     NoHostHeader,
-    #[error("Client connection is not setup")]
+    #[error("Proxy connection is not setup")]
+    ProxyNotReady,
+    #[error("Client connection is empty")]
     EmptyConnection,
     #[error("Must contain an upgrade extension")]
     NoUpgradeExtension,
@@ -12,4 +14,6 @@ pub enum ServerError {
     NoUpgradeHeader,
     #[error("Host name is invalid")]
     InvalidHostName,
+    #[error("Server config is not valid")]
+    InvalidConfig,
 }

@@ -36,7 +36,7 @@ lazy_static! {
 /// Proxy endpoint request is served via actix-web.
 pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16, require_auth: bool) -> Result<()> {
     log::info!("Api server listens at {} {}", &domain, api_port);
-    log::info!("Start proxy server at {} {}, options: {} {}", &domain, proxy_port, secure,  max_sockets);
+    log::info!("Start proxy server at {} {}, options: {} {}, require auth: {}", &domain, proxy_port, secure,  max_sockets, require_auth);
 
     let manager = Arc::new(Mutex::new(ClientManager::new()));
     let api_state = web::Data::new(State {

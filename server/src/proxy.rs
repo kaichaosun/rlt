@@ -16,9 +16,9 @@ pub async fn proxy_handler(mut req: Request<Incoming>, manager: Arc<Mutex<Client
     let endpoint = extract(hostname)?;
 
     let mut manager = manager.lock().await;
-    let client = manager.clients.get_mut(&endpoint).ok_or(ServerError::EmptyConnection)?;
+    let client = manager.clients.get_mut(&endpoint).ok_or(ServerError::ProxyNotReady)?;
     let mut client = client.lock().await;
-    let client_stream = client.take().await.unwrap();
+    let client_stream = client.take().await.ok_or(ServerError::EmptyConnection)?;
 
     if !req.headers().contains_key(UPGRADE) {
         let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await?;

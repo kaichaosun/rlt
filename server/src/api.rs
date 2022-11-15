@@ -20,11 +20,21 @@ pub async fn api_status() -> impl Responder {
 #[get("/{endpoint}")]
 pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<AuthInfo>, state: web::Data<State>) -> impl Responder {
     log::debug!("Request proxy endpoint, {}", endpoint);
-
+    log::debug!("Require auth: {}", state.require_auth);
+    
     if state.require_auth {
-        if !CfWorkerStore.credential_is_valid(&info.credential, &endpoint) {
-            return HttpResponse::BadRequest().body(format!("Error: credential is not valid."))
-        }
+        let credential = match info.credential.clone() {
+            Some(val) => val,
+            None => return HttpResponse::BadRequest().body("Request Error: credential param is empty.")
+        };
+        match CfWorkerStore.credential_is_valid(&credential, &endpoint) {
+            Ok(true) => (),
+            Ok(false) => return HttpResponse::BadRequest().body(format!("Error: credential is not valid.")),
+            Err(err) => {
+                log::error!("Server error: {:?}", err);
+                return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err))
+            }
+        };
     }
 
     let mut manager = state.manager.lock().await;
@@ -49,7 +59,7 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
 
 #[derive(Debug, Deserialize)]
 pub struct AuthInfo {
-    credential: String,
+    credential: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
