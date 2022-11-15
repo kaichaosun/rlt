@@ -21,7 +21,7 @@ pub async fn api_status() -> impl Responder {
 pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<AuthInfo>, state: web::Data<State>) -> impl Responder {
     log::debug!("Request proxy endpoint, {}", endpoint);
     log::debug!("Require auth: {}", state.require_auth);
-    
+
     if state.require_auth {
         let credential = match info.credential.clone() {
             Some(val) => val,
@@ -40,11 +40,12 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
     let mut manager = state.manager.lock().await;
     match manager.put(endpoint.to_string()).await {
         Ok(port) => {
+            let schema = if state.secure { "https" } else {"http"};
             let info = ProxyInfo {
                 id: endpoint.to_string(),
                 port,
                 max_conn_count: state.max_sockets,
-                url: format!("{}.localhost", endpoint.to_string()),
+                url: format!("{}://{}.{}", schema, endpoint.to_string(), state.domain),
             };
         
             log::debug!("Proxy info, {:?}", info);

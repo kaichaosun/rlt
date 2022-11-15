@@ -43,6 +43,8 @@ pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8,
         manager: manager.clone(),
         max_sockets,
         require_auth,
+        secure,
+        domain,
     });
 
     let proxy_addr: SocketAddr = ([127, 0, 0, 1], proxy_port).into();

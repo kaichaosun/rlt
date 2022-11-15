@@ -7,6 +7,8 @@ pub struct State {
     pub manager: Arc<Mutex<ClientManager>>,
     pub max_sockets: u8,
     pub require_auth: bool,
+    pub secure: bool,
+    pub domain: String,
 }
 
 pub struct ClientManager {
