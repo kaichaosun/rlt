@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use localtunnel::{open_tunnel, broadcast};
+use localtunnel_client::{open_tunnel, broadcast};
 use localtunnel_server::start;
 use tokio::signal;
 use anyhow::Result;

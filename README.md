@@ -8,7 +8,7 @@ Localtunnel exposes your localhost endpoint to the world, user cases are:
 - multiple devices access to single data store
 - peer to peer connection, workaround for NAT hole punching.
 
-## Usage
+## Client Usage
 
 Use in CLI:
 
@@ -21,11 +21,11 @@ localtunnel-cli client --host https://localtunnel.me --subdomain kaichao --port 
 Use as a Rust library:
 
 ```shell
-cargo add localtunnel
+cargo add localtunnel-client
 ```
 
 ```Rust
-use localtunnel::{open_tunnel, broadcast};
+use localtunnel_client::{open_tunnel, broadcast};
 
 let (notify_shutdown, _) = broadcast::channel(1);
 let result = open_tunnel(
@@ -35,10 +35,31 @@ let result = open_tunnel(
     3000,
     notify_shutdown.clone(),
     10,
+    None,
 ).await;
 
 // Shutdown the background tasks by sending a signal.
 let _ = notify_shutdown.send(());
+```
+
+## Server Usage
+
+Use in CLI:
+
+```shell
+localtunnel-cli server --domain localtunnel.me --port 3000 --proxy-port 3001 --secure
+```
+
+Use as a Rust library,
+
+```shell
+cargo install localtunnel-server
+```
+
+```Rust
+use localtunnel_server::start;
+
+start("localtunnel.me", 3000, true, 10, 3001, false).await?
 ```
 
 ## Resources
