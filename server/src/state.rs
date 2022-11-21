@@ -53,7 +53,7 @@ impl Client {
         }
     }
     pub async fn listen(&mut self) -> io::Result<u16> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let listener = TcpListener::bind("0.0.0.0:0").await?;
         let port = listener.local_addr()?.port();
         self.port = Some(port);
 
