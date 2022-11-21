@@ -13,9 +13,9 @@ Localtunnel exposes your localhost endpoint to the world, user cases are:
 Use in CLI:
 
 ```shell
-cargo install localtunnel-cli
+cargo install localtunnel
 
-localtunnel-cli client --host https://localtunnel.me --subdomain kaichao --port 3000
+localtunnel client --host https://localtunnel.me --subdomain kaichao --port 3000
 ```
 
 Use as a Rust library:
@@ -47,7 +47,7 @@ let _ = notify_shutdown.send(());
 Use in CLI:
 
 ```shell
-localtunnel-cli server --domain localtunnel.me --port 3000 --proxy-port 3001 --secure
+localtunnel server --domain localtunnel.me --port 3000 --proxy-port 3001 --secure
 ```
 
 Use as a Rust library,

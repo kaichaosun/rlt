@@ -27,7 +27,8 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
             Some(val) => val,
             None => return HttpResponse::BadRequest().body("Request Error: credential param is empty.")
         };
-        match CfWorkerStore.credential_is_valid(&credential, &endpoint) {
+
+        match CfWorkerStore.credential_is_valid(&credential, &endpoint).await {
             Ok(true) => (),
             Ok(false) => return HttpResponse::BadRequest().body(format!("Error: credential is not valid.")),
             Err(err) => {
