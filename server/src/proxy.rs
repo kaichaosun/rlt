@@ -86,10 +86,33 @@ fn extract(hostname: &str) -> Result<String> {
     let hostname = hostname
         .replace("http://", "")
         .replace("https://", "")
-        .replace("ws", "")
-        .replace("wss", "");
+        .replace("ws://", "")
+        .replace("wss://", "");
 
     let subdomain = hostname.split(".").next().ok_or(ServerError::InvalidHostName)?;
     
     Ok(subdomain.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract;
+
+    #[test]
+    fn extract_subdomain_works() {
+        let hostname = "demo.example.org";
+        let subdomain = "demo".to_string();
+
+        let domains = [
+            &format!("http://{}", hostname),
+            &format!("https://{}", hostname),
+            &format!("ws://{}", hostname),
+            &format!("wss://{}", hostname),
+            hostname,
+        ];
+
+        for domain in domains {
+            assert_eq!(extract(domain).unwrap(), subdomain);
+        }
+    }
 }
