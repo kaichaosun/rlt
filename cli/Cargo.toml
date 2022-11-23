@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel"
-version = "0.0.10"
+version = "0.0.11"
 edition = "2021"
 description = "A CLI to proxy with localtunnel server."
 license = "MIT"
@@ -10,8 +10,8 @@ repository = "https://github.com/kaichaosun/rlt"
 
 [dependencies]
 clap = { version = "3.2.14", features = ["derive"] }
-localtunnel-client = { path = "../client", version = "0.0.10" }
-localtunnel-server = { path = "../server", version = "0.0.1" }
+localtunnel-client = { path = "../client", version = "0.0.11" }
+localtunnel-server = { path = "../server", version = "0.0.2" }
 tokio = { version = "1.19.2", features = ["full"] }
 log = "0.4"
 env_logger = "0.9"
