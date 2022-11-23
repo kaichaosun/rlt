@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio::time::{Duration, sleep};
 
 pub use tokio::sync::broadcast;
 
@@ -106,7 +107,6 @@ async fn tunnel_to_endpoint(
 
     tokio::spawn(async move {
         loop {
-            // TODO sleep exponentially if connection to remote port and local port failed
             tokio::select! {
                 res = limit_connection.clone().acquire_owned() => {
                     let permit = match res {
@@ -125,7 +125,13 @@ async fn tunnel_to_endpoint(
                         log::debug!("Create a new proxy connection.");
                         tokio::select! {
                             res = handle_connection(server_host, server_port, local_host, local_port) => {
-                                log::debug!("Connection result: {:?}", res);
+                                match res {
+                                    Ok(_) => log::info!("Connection result: {:?}", res),
+                                    Err(err) => {
+                                        log::error!("Failed to connect to proxy server: {:?}", err);
+                                        sleep(Duration::from_secs(10)).await;
+                                    }
+                                }
                             }
                             _ = shutdown_receiver.recv() => {
                                 log::debug!("Shutting down the connection immediately");
