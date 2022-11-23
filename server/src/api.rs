@@ -6,7 +6,6 @@ use anyhow::Result;
 use crate::state::State;
 use crate::auth::{Auth, CfWorkerStore};
 
-/// TODO get tunnel status from state
 #[get("/api/status")]
 pub async fn api_status() -> impl Responder {
     let status = ApiStatus {
