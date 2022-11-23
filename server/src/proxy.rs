@@ -3,6 +3,7 @@ use std::sync::Arc;
 use hyper::{Request, Response, body::Incoming, header::{UPGRADE, HOST}, upgrade::OnUpgrade, StatusCode};
 use tokio::sync::Mutex;
 use anyhow::Result;
+use regex::Regex;
 
 use crate::state::ClientManager;
 use crate::error::ServerError;
@@ -82,13 +83,9 @@ pub async fn proxy_handler(mut req: Request<Incoming>, manager: Arc<Mutex<Client
 }
 
 fn extract(hostname: &str) -> Result<String> {
-    // TODO regex
-    let hostname = hostname
-        .replace("http://", "")
-        .replace("https://", "")
-        .replace("ws://", "")
-        .replace("wss://", "");
-
+    let re = Regex::new(r"(https?|wss?)://")?;
+    let hostname = re.replace_all(hostname, "");
+    
     let subdomain = hostname.split(".").next().ok_or(ServerError::InvalidHostName)?;
     
     Ok(subdomain.to_string())
