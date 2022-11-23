@@ -1,5 +1,7 @@
 use actix_web::{get, web, Responder, HttpResponse};
 use serde::{Serialize, Deserialize};
+use regex::Regex;
+use anyhow::Result;
 
 use crate::state::State;
 use crate::auth::{Auth, CfWorkerStore};
@@ -16,11 +18,16 @@ pub async fn api_status() -> impl Responder {
 }
 
 /// Request proxy endpoint
-/// TODO add validation to the endpoint, and check query new.
 #[get("/{endpoint}")]
 pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<AuthInfo>, state: web::Data<State>) -> impl Responder {
     log::debug!("Request proxy endpoint, {}", endpoint);
     log::debug!("Require auth: {}", state.require_auth);
+
+    match validate_endpoint(&endpoint) {
+        Ok(true) => (),
+        Ok(false) => return HttpResponse::BadRequest().body("Request subdomain is invalid, only chars in lowercase and numbers are allowed"),
+        Err(err) => return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err)),
+    }
 
     if state.require_auth {
         let credential = match info.credential.clone() {
@@ -59,6 +66,12 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
     }
 }
 
+fn validate_endpoint(endpoint: &str) -> Result<bool> {
+    // Don't allow A-Z uppercase since it will convert to lowercase in browser
+    let re = Regex::new("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")?;
+    Ok(re.is_match(endpoint))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AuthInfo {
     credential: Option<String>,
@@ -76,4 +89,22 @@ struct ProxyInfo {
     port: u16,
     max_conn_count: u8,
     url: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::validate_endpoint;
+
+    #[test]
+    fn validate_endpoint_works() {
+        let endpoints = [
+            "demo",
+            "123",
+            "did-key-zq3shkkuzlvqefghdgzgfmux8vgkgvwsla83w2oekhzxocw2n",
+        ];
+
+        for endpoint in endpoints {
+            assert_eq!(validate_endpoint(endpoint).unwrap(), true);
+        }
+    }
 }
