@@ -65,10 +65,10 @@ async fn get_tunnel_endpoint(
     if let Some(credential) = credential {
         uri = format!("{}?credential={}", uri, credential);
     }
-    log::debug!("Request for assign domain: {}", uri);
+    log::info!("Request for assign domain: {}", uri);
 
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
-    log::debug!("Respone from server: {:#?}", resp);
+    log::info!("Respone from server: {:#?}", resp);
 
     let parts = resp.url.split("//").collect::<Vec<&str>>();
     let mut host = parts[1].split(":").collect::<Vec<&str>>()[0];
@@ -94,7 +94,7 @@ async fn tunnel_to_endpoint(
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
 ) {
-    log::debug!("Tunnel server info: {:?}", server);
+    log::info!("Tunnel server info: {:?}", server);
     let server_host = server.host;
     let server_port = server.port;
     let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
@@ -122,7 +122,7 @@ async fn tunnel_to_endpoint(
                     let mut shutdown_receiver = shutdown_signal.subscribe();
 
                     tokio::spawn(async move {
-                        log::debug!("Create a new proxy connection.");
+                        log::info!("Create a new proxy connection.");
                         tokio::select! {
                             res = handle_connection(server_host, server_port, local_host, local_port) => {
                                 match res {
@@ -134,7 +134,7 @@ async fn tunnel_to_endpoint(
                                 }
                             }
                             _ = shutdown_receiver.recv() => {
-                                log::debug!("Shutting down the connection immediately");
+                                log::info!("Shutting down the connection immediately");
                             }
                         }
 
