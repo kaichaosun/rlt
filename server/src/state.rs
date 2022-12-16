@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, io::{self, ErrorKind}};
+use std::{collections::HashMap, sync::Arc, io};
 
 use tokio::{net::{TcpListener, TcpStream}, sync::Mutex};
 
@@ -27,18 +27,11 @@ impl ClientManager {
     }
 
     pub async fn put(&mut self, url: String) -> io::Result<u16> {
-        match self.clients.get(&url) {
-            Some(client) => {
-                client.lock().await.port.ok_or(io::Error::new(ErrorKind::Other, "Empty port"))
-            },
-            None => {
-                let client = Arc::new(Mutex::new(Client::new(self.default_max_sockets)));
-                self.clients.insert(url, client.clone() );
-    
-                let mut client = client.lock().await;
-                client.listen().await
-            }
-        }
+        let client = Arc::new(Mutex::new(Client::new(self.default_max_sockets)));
+        self.clients.insert(url, client.clone() );
+
+        let mut client = client.lock().await;
+        client.listen().await
     }
 }
 

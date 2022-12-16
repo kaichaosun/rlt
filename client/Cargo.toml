@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel-client"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2021"
 description = "A client to connect with localtunnel server."
 license = "MIT"
