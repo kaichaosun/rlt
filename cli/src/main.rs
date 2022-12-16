@@ -25,7 +25,7 @@ enum Command {
         #[clap(long)]
         subdomain: String,
         /// The local host to expose.
-        #[clap(long, default_value = "localhost")]
+        #[clap(long, default_value = "127.0.0.1")]
         local_host: String,
         /// The local port to expose.
         #[clap(short, long)]

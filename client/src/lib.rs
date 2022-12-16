@@ -68,7 +68,7 @@ async fn get_tunnel_endpoint(
     log::info!("Request for assign domain: {}", uri);
 
     let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
-    log::info!("Respone from server: {:#?}", resp);
+    log::info!("Response from server: {:#?}", resp);
 
     let parts = resp.url.split("//").collect::<Vec<&str>>();
     let mut host = parts[1].split(":").collect::<Vec<&str>>()[0];

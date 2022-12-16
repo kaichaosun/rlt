@@ -73,7 +73,9 @@ impl Client {
                         log::info!("new client connection: {:?}", addr);
                         
                         let mut sockets = sockets.lock().await;
+                        log::debug!("Sockets length: {}", sockets.len());
                         if sockets.len() < max_sockets as usize {
+                            log::debug!("Add a new socket, max: {}", max_sockets);
                             sockets.push(socket)
                         }
                     },
