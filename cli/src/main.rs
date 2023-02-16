@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use localtunnel_client::{open_tunnel, broadcast};
-use localtunnel_server::start;
+use localtunnel_server::{start, ServerConfig};
 use tokio::signal;
 use anyhow::Result;
 
@@ -99,7 +99,15 @@ async fn main() -> Result<()> {
             proxy_port,
             require_auth,
         } => {
-            start(domain, port, secure, max_sockets, proxy_port, require_auth).await?;
+            let config = ServerConfig {
+                domain,
+                api_port: port,
+                secure,
+                max_sockets,
+                proxy_port,
+                require_auth,
+            };
+            start(config).await?;
         }
     }
 

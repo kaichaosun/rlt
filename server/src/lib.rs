@@ -32,11 +32,26 @@ lazy_static! {
     };
 }
 
+pub struct ServerConfig {
+    pub domain: String,
+    pub api_port: u16,
+    pub secure: bool,
+    pub max_sockets: u8,
+    pub proxy_port: u16,
+    pub require_auth: bool,
+}
+
 /// Start the proxy use low level api from hyper.
 /// Proxy endpoint request is served via actix-web.
-pub async fn start(domain: String, api_port: u16, secure: bool, max_sockets: u8, proxy_port: u16, require_auth: bool) -> Result<()> {
+pub async fn start(config: ServerConfig) -> Result<()> {
+    let ServerConfig {
+        domain, api_port, secure, max_sockets, proxy_port, require_auth
+    } = config;
     log::info!("Api server listens at {} {}", &domain, api_port);
-    log::info!("Start proxy server at {} {}, options: {} {}, require auth: {}", &domain, proxy_port, secure,  max_sockets, require_auth);
+    log::info!(
+        "Start proxy server at {} {}, options: {} {}, require auth: {}",
+        &domain, proxy_port, secure,  max_sockets, require_auth
+    );
 
     let manager = Arc::new(Mutex::new(ClientManager::new(max_sockets)));
     let api_state = web::Data::new(State {
