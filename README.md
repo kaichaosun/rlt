@@ -25,18 +25,20 @@ cargo add localtunnel-client
 ```
 
 ```Rust
-use localtunnel_client::{open_tunnel, broadcast};
+use localtunnel_client::{open_tunnel, broadcast, ClientConfig};
 
 let (notify_shutdown, _) = broadcast::channel(1);
-let result = open_tunnel(
-    Some("https://localtunnel.me"),
-    Some("kaichao"),
-    Some("locallhost"),
-    3000,
-    notify_shutdown.clone(),
-    10,
-    None,
-).await;
+
+let config = ClientConfig {
+    server: Some("https://localtunnel.me".to_string()),
+    subdomain: Some("demo".to_string()),
+    local_host: Some("localhost".to_string()),
+    local_port: 3000,
+    shutdown_signal: notify_shutdown.clone(),
+    max_conn: 10,
+    credential: None,
+};
+let result = open_tunnel(config).await?;
 
 // Shutdown the background tasks by sending a signal.
 let _ = notify_shutdown.send(());
@@ -57,9 +59,18 @@ cargo install localtunnel-server
 ```
 
 ```Rust
-use localtunnel_server::start;
+use localtunnel_server::{start, ServerConfig};
 
-start("localtunnel.me", 3000, true, 10, 3001, false).await?
+let config = ServerConfig {
+    domain: "localtunnel.me".to_string(),
+    api_port: 3000,
+    secure: true,
+    max_sockets: 10,
+    proxy_port: 3001,
+    require_auth: false,
+};
+
+start(config).await?
 ```
 
 ## Resources
