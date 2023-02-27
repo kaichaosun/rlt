@@ -1,7 +1,8 @@
 # Localtunnel
 
 [![localtunnel](https://img.shields.io/crates/v/localtunnel.svg)](https://crates.io/crates/localtunnel)
-[![localtunnel-cli](https://img.shields.io/crates/v/localtunnel-cli.svg)](https://crates.io/crates/localtunnel-cli)
+[![localtunnel-client](https://img.shields.io/crates/v/localtunnel-client.svg)](https://crates.io/crates/localtunnel-client)
+[![localtunnel-server](https://img.shields.io/crates/v/localtunnel-server.svg)](https://crates.io/crates/localtunnel-server)
 
 Localtunnel exposes your localhost endpoint to the world, user cases are:
 - API testing
