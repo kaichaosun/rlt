@@ -29,16 +29,21 @@ pub struct TunnelServerInfo {
     pub url: String,
 }
 
+pub struct ClientConfig {
+    pub server: Option<String>,
+    pub subdomain: Option<String>,
+    pub local_host: Option<String>,
+    pub local_port: u16,
+    pub shutdown_signal: broadcast::Sender<()>,
+    pub max_conn: u8,
+    pub credential: Option<String>,
+}
+
 /// Open tunnels directly between server and localhost
-pub async fn open_tunnel(
-    server: Option<&str>,
-    subdomain: Option<&str>,
-    local_host: Option<&str>,
-    local_port: u16,
-    shutdown_signal: broadcast::Sender<()>,
-    max_conn: u8,
-    credential: Option<String>,
-) -> Result<String> {
+pub async fn open_tunnel(config: ClientConfig) -> Result<String> {
+    let ClientConfig {
+        server, subdomain, local_host, local_port, shutdown_signal, max_conn, credential
+    } = config;
     let tunnel_info = get_tunnel_endpoint(server, subdomain, credential).await?;
 
     // TODO check the connect is failed and restart the proxy.
@@ -55,12 +60,12 @@ pub async fn open_tunnel(
 }
 
 async fn get_tunnel_endpoint(
-    server: Option<&str>,
-    subdomain: Option<&str>,
+    server: Option<String>,
+    subdomain: Option<String>,
     credential: Option<String>,
 ) -> Result<TunnelServerInfo> {
-    let server = server.unwrap_or(PROXY_SERVER);
-    let assigned_domain = subdomain.unwrap_or("?new");
+    let server = server.as_deref().unwrap_or(PROXY_SERVER);
+    let assigned_domain = subdomain.as_deref().unwrap_or("?new");
     let mut uri = format!("{}/{}", server, assigned_domain);
     if let Some(credential) = credential {
         uri = format!("{}?credential={}", uri, credential);
@@ -89,7 +94,7 @@ async fn get_tunnel_endpoint(
 
 async fn tunnel_to_endpoint(
     server: TunnelServerInfo,
-    local_host: Option<&str>,
+    local_host: Option<String>,
     local_port: u16,
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
@@ -97,7 +102,7 @@ async fn tunnel_to_endpoint(
     log::info!("Tunnel server info: {:?}", server);
     let server_host = server.host;
     let server_port = server.port;
-    let local_host = local_host.unwrap_or(LOCAL_HOST).to_string();
+    let local_host = local_host.unwrap_or(LOCAL_HOST.to_string());
 
     let count = std::cmp::min(server.max_conn_count, max_conn);
     log::info!("Max connection count: {}", count);

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use localtunnel_client::{open_tunnel, broadcast};
+use localtunnel_client::{open_tunnel, broadcast, ClientConfig};
 use localtunnel_server::{start, ServerConfig};
 use tokio::signal;
 use anyhow::Result;
@@ -76,16 +76,16 @@ async fn main() -> Result<()> {
             credential,
         } => {
             let (notify_shutdown, _) = broadcast::channel(1);
-            let result = open_tunnel(
-                Some(&host),
-                Some(&subdomain),
-                Some(&local_host),
-                port,
-                notify_shutdown.clone(),
+            let config = ClientConfig {
+                server: Some(host),
+                subdomain: Some(subdomain),
+                local_host: Some(local_host),
+                local_port: port,
+                shutdown_signal: notify_shutdown.clone(),
                 max_conn,
-                credential
-            )
-            .await?;
+                credential,
+            };
+            let result = open_tunnel(config).await?;
             log::info!("Tunnel url: {:?}", result);
 
             signal::ctrl_c().await?;
