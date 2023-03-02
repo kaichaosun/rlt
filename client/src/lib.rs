@@ -9,7 +9,7 @@ use tokio::time::{Duration, sleep};
 
 pub use tokio::sync::broadcast;
 
-pub const PROXY_SERVER: &str = "https://localtunnel.me";
+pub const PROXY_SERVER: &str = "https://init.so";
 pub const LOCAL_HOST: &str = "127.0.0.1";
 
 #[derive(Debug, Serialize, Deserialize)]
