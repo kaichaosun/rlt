@@ -133,7 +133,7 @@ async fn tunnel_to_endpoint(
                                 match res {
                                     Ok(_) => log::info!("Connection result: {:?}", res),
                                     Err(err) => {
-                                        log::error!("Failed to connect to proxy server: {:?}", err);
+                                        log::error!("Failed to connect to proxy or local server: {:?}", err);
                                         sleep(Duration::from_secs(10)).await;
                                     }
                                 }
@@ -161,7 +161,9 @@ async fn handle_connection(
     local_host: String,
     local_port: u16,
 ) -> Result<()> {
+    log::debug!("Connect to remote: {}, {}", remote_host, remote_port);
     let remote_stream = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
+    log::debug!("Connect to local: {}, {}", local_host, local_port);
     let local_stream = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
 
     proxy(remote_stream, local_stream).await?;
