@@ -9,8 +9,12 @@ repository = "https://github.com/kaichaosun/rlt"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.23.0", features = ["full"] }
 anyhow = { version = "1.0", features = ["backtrace"] }
 log = "0.4"
+
+[features]
+default = ["reqwest/default"]
+rustls-tls = ["reqwest/rustls-tls"]
