@@ -47,6 +47,7 @@ jobs:
           path: ${{ matrix.platform.name }}
     
   publish:
+    needs: [build]
     name: Publish binaries
     runs-on: ubuntu-latest
     steps:
