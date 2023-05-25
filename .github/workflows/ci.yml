@@ -6,7 +6,7 @@ on:
           - main
         paths-ignore:
           - '.github/workflows/publish.yml'
-          - '.github/workflows/release.yml'
+          - '.github/workflows/ci.yml'
           - '.github/FUNDING.yml'
           - '**README.md'
           - '.gitignore'
