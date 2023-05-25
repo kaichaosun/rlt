@@ -48,7 +48,7 @@ jobs:
     
   publish:
     name: Publish binaries
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v3
