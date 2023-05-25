@@ -1,0 +1,25 @@
+name: CI
+
+on:
+    pull_request:
+        branches:
+          - main
+        paths-ignore:
+          - '.github/workflows/publish.yml'
+          - '.github/workflows/ci.yml'
+          - '.github/FUNDING.yml'
+          - '**README.md'
+          - '.gitignore'
+          - 'LICENSE'
+jobs:
+    tests-package:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v3
+            - name: Rust tooling
+              uses: dtolnay/rust-toolchain@stable
+            - name: Cache rust
+              uses: Swatinem/rust-cache@v2
+            - name: Test Rust
+              run: cargo test

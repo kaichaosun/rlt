@@ -1,7 +1,5 @@
 [workspace]
 
-members = [
-    "cli",
-    "client",
-    "server"
-]
+members = ["cli", "client", "server"]
+[workspace.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
