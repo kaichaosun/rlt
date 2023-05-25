@@ -1,5 +1,5 @@
 [workspace]
-package.version = "0.1.1"
+package.version = "0.2.1"
 package.edition = "2021"
 package.license = "MIT"
 package.repository = "https://github.com/kaichaosun/rlt"
