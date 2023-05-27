@@ -15,8 +15,7 @@ log = { workspace = true }
 actix-web = "4"
 serde = { workspace = true }
 hyper = { version = "1.0.0-rc.1", features = ["full"] }
-reqwest = { workspace = true, features = ["blocking"] }
-openssl = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "native-tls-vendored"] }
 lazy_static = "1.4.0"
 envy = "0.4"
 dotenv = "0.15.0"

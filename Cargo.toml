@@ -1,14 +1,13 @@
 [workspace]
-package.version = "0.2.1"
+package.version = "0.1.2"
 package.edition = "2021"
 package.license = "MIT"
 package.repository = "https://github.com/kaichaosun/rlt"
 members = ["cli", "client", "server"]
 
 [workspace.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
 tokio = { version = "1.23.0", features = ["full"] }
 anyhow = { version = "1.0", features = ["backtrace"] }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
-reqwest = { version = "0.11", features = ["json"], default-features = false }
+reqwest = { version = "0.11", features = ["json"] }
