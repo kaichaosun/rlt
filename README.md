@@ -9,11 +9,9 @@ Localtunnel exposes your localhost endpoint to the world, user cases are:
 - multiple devices access to single data store
 - peer to peer connection, workaround for NAT hole punching.
 
-## Sponsor
-
-__Please help me build OSS and maintain the common good proxy server__ 👉 [GitHub Sponsors](https://github.com/sponsors/kaichaosun) :heart:
-
 ## Client Usage
+
+Known issue: *the public proxy server is down, please setup your own server.*
 
 Use in CLI:
 
@@ -77,6 +75,10 @@ let config = ServerConfig {
 
 start(config).await?
 ```
+
+## Sponsor
+
+__Please help me build OSS__ 👉 [GitHub Sponsors](https://github.com/sponsors/kaichaosun)
 
 ## Resources
 
