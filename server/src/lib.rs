@@ -62,7 +62,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
         domain,
     });
 
-    let proxy_addr: SocketAddr = ([127, 0, 0, 1], proxy_port).into();
+    let proxy_addr: SocketAddr = ([0, 0, 0, 0], proxy_port).into();
     let listener = TcpListener::bind(proxy_addr).await?;
     tokio::spawn(async move {
         loop {
@@ -96,7 +96,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
             .service(api_status)
             .service(request_endpoint)
     })
-    .bind(("127.0.0.1", api_port))?
+    .bind(("0.0.0.0", api_port))?
     .run()
     .await?;
 
