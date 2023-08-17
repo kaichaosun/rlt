@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 pub use tokio::sync::broadcast;
 
@@ -42,7 +42,13 @@ pub struct ClientConfig {
 /// Open tunnels directly between server and localhost
 pub async fn open_tunnel(config: ClientConfig) -> Result<String> {
     let ClientConfig {
-        server, subdomain, local_host, local_port, shutdown_signal, max_conn, credential
+        server,
+        subdomain,
+        local_host,
+        local_port,
+        shutdown_signal,
+        max_conn,
+        credential,
     } = config;
     let tunnel_info = get_tunnel_endpoint(server, subdomain, credential).await?;
 
@@ -76,8 +82,8 @@ async fn get_tunnel_endpoint(
     log::info!("Response from server: {:#?}", resp);
 
     let parts = resp.url.split("//").collect::<Vec<&str>>();
-    let mut host = parts[1].split(":").collect::<Vec<&str>>()[0];
-    host = match host.split_once(".") {
+    let mut host = parts[1].split(':').collect::<Vec<&str>>()[0];
+    host = match host.split_once('.') {
         Some((_, base)) => base,
         None => host,
     };

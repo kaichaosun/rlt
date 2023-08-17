@@ -1,6 +1,9 @@
-use std::{collections::HashMap, sync::Arc, io};
+use std::{collections::HashMap, io, sync::Arc};
 
-use tokio::{net::{TcpListener, TcpStream}, sync::Mutex};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
 
 /// App state holds all the client connection and status info.
 pub struct State {
@@ -28,7 +31,7 @@ impl ClientManager {
 
     pub async fn put(&mut self, url: String) -> io::Result<u16> {
         let client = Arc::new(Mutex::new(Client::new(self.default_max_sockets)));
-        self.clients.insert(url, client.clone() );
+        self.clients.insert(url, client.clone());
 
         let mut client = client.lock().await;
         client.listen().await
@@ -64,14 +67,14 @@ impl Client {
                 match listener.accept().await {
                     Ok((socket, addr)) => {
                         log::info!("new client connection: {:?}", addr);
-                        
+
                         let mut sockets = sockets.lock().await;
                         log::debug!("Sockets length: {}", sockets.len());
                         if sockets.len() < max_sockets as usize {
                             log::debug!("Add a new socket, max: {}", max_sockets);
                             sockets.push(socket)
                         }
-                    },
+                    }
                     Err(e) => log::info!("Couldn't get client: {:?}", e),
                 }
             }

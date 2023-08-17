@@ -5,25 +5,25 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::{sync::Arc, net::SocketAddr};
+use std::{net::SocketAddr, sync::Arc};
 
 use actix_web::{web, App, HttpServer};
-use hyper::{service::service_fn, server::conn::http1};
-use tokio::{net::TcpListener, sync::Mutex};
-use dotenv::dotenv;
 use anyhow::Result;
+use dotenv::dotenv;
+use hyper::{server::conn::http1, service::service_fn};
+use tokio::{net::TcpListener, sync::Mutex};
 
 use crate::api::{api_status, request_endpoint};
 use crate::config::Config;
-use crate::state::{State, ClientManager};
 use crate::proxy::proxy_handler;
+use crate::state::{ClientManager, State};
 
 mod api;
-mod state;
-mod proxy;
 mod auth;
 mod config;
 mod error;
+mod proxy;
+mod state;
 
 lazy_static! {
     static ref CONFIG: Config = {
@@ -45,12 +45,21 @@ pub struct ServerConfig {
 /// Proxy endpoint request is served via actix-web.
 pub async fn start(config: ServerConfig) -> Result<()> {
     let ServerConfig {
-        domain, api_port, secure, max_sockets, proxy_port, require_auth
+        domain,
+        api_port,
+        secure,
+        max_sockets,
+        proxy_port,
+        require_auth,
     } = config;
     log::info!("Api server listens at {} {}", &domain, api_port);
     log::info!(
         "Start proxy server at {} {}, options: {} {}, require auth: {}",
-        &domain, proxy_port, secure,  max_sockets, require_auth
+        &domain,
+        proxy_port,
+        secure,
+        max_sockets,
+        require_auth
     );
 
     let manager = Arc::new(Mutex::new(ClientManager::new(max_sockets)));
@@ -71,10 +80,8 @@ pub async fn start(config: ServerConfig) -> Result<()> {
                     log::info!("Accepted a new proxy request");
 
                     let proxy_manager = manager.clone();
-                    let service = service_fn(move |req| {
-                        proxy_handler(req, proxy_manager.clone())
-                    });
-        
+                    let service = service_fn(move |req| proxy_handler(req, proxy_manager.clone()));
+
                     tokio::spawn(async move {
                         if let Err(err) = http1::Builder::new()
                             .serve_connection(stream, service)
@@ -84,7 +91,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
                             log::error!("Failed to serve connection: {:?}", err);
                         }
                     });
-                },
+                }
                 Err(e) => log::error!("Failed to accept the request: {:?}", e),
             }
         }

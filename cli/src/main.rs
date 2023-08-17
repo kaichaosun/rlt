@@ -1,8 +1,8 @@
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use localtunnel_client::{open_tunnel, broadcast, ClientConfig};
+use localtunnel_client::{broadcast, open_tunnel, ClientConfig};
 use localtunnel_server::{start, ServerConfig};
 use tokio::signal;
-use anyhow::Result;
 
 mod config;
 
