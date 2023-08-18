@@ -1,10 +1,10 @@
-use actix_web::{get, web, Responder, HttpResponse};
-use serde::{Serialize, Deserialize};
-use regex::Regex;
+use actix_web::{get, web, HttpResponse, Responder};
 use anyhow::Result;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
-use crate::state::State;
 use crate::auth::{Auth, CfWorkerStore};
+use crate::state::State;
 
 #[get("/api/status")]
 pub async fn api_status() -> impl Responder {
@@ -18,28 +18,46 @@ pub async fn api_status() -> impl Responder {
 
 /// Request proxy endpoint
 #[get("/{endpoint}")]
-pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<AuthInfo>, state: web::Data<State>) -> impl Responder {
+pub async fn request_endpoint(
+    endpoint: web::Path<String>,
+    info: web::Query<AuthInfo>,
+    state: web::Data<State>,
+) -> impl Responder {
     log::debug!("Request proxy endpoint, {}", endpoint);
     log::debug!("Require auth: {}", state.require_auth);
 
     match validate_endpoint(&endpoint) {
         Ok(true) => (),
-        Ok(false) => return HttpResponse::BadRequest().body("Request subdomain is invalid, only chars in lowercase and numbers are allowed"),
-        Err(err) => return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err)),
+        Ok(false) => {
+            return HttpResponse::BadRequest().body(
+                "Request subdomain is invalid, only chars in lowercase and numbers are allowed",
+            )
+        }
+        Err(err) => {
+            return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err))
+        }
     }
 
     if state.require_auth {
         let credential = match info.credential.clone() {
             Some(val) => val,
-            None => return HttpResponse::BadRequest().body("Request Error: credential param is empty.")
+            None => {
+                return HttpResponse::BadRequest().body("Request Error: credential param is empty.")
+            }
         };
 
-        match CfWorkerStore.credential_is_valid(&credential, &endpoint).await {
+        match CfWorkerStore
+            .credential_is_valid(&credential, &endpoint)
+            .await
+        {
             Ok(true) => (),
-            Ok(false) => return HttpResponse::BadRequest().body(format!("Error: credential is not valid.")),
+            Ok(false) => {
+                return HttpResponse::BadRequest()
+                    .body("Error: credential is not valid.".to_string())
+            }
             Err(err) => {
                 log::error!("Server error: {:?}", err);
-                return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err))
+                return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err));
             }
         };
     }
@@ -47,20 +65,20 @@ pub async fn request_endpoint(endpoint: web::Path<String>, info: web::Query<Auth
     let mut manager = state.manager.lock().await;
     match manager.put(endpoint.to_string()).await {
         Ok(port) => {
-            let schema = if state.secure { "https" } else {"http"};
+            let schema = if state.secure { "https" } else { "http" };
             let info = ProxyInfo {
                 id: endpoint.to_string(),
                 port,
                 max_conn_count: state.max_sockets,
-                url: format!("{}://{}.{}", schema, endpoint.to_string(), state.domain),
+                url: format!("{}://{}.{}", schema, endpoint, state.domain),
             };
-        
+
             log::debug!("Proxy info, {:?}", info);
             HttpResponse::Ok().json(info)
-        },
+        }
         Err(e) => {
             log::error!("Client manager failed to put proxy endpoint: {:?}", e);
-            return HttpResponse::InternalServerError().body(format!("Error: {:?}", e))
+            HttpResponse::InternalServerError().body(format!("Error: {:?}", e))
         }
     }
 }
