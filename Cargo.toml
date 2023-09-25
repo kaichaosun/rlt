@@ -1,7 +1,8 @@
-[workspace]
-package.edition = "2021"
-package.license = "MIT"
-package.repository = "https://github.com/kaichaosun/rlt"
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/kaichaosun/rlt"
+
 members = ["cli", "client", "server"]
 
 [workspace.dependencies]
