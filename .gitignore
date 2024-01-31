@@ -2,3 +2,4 @@ target
 .env
 *.service
 **/.DS_Store
+**/node_modules

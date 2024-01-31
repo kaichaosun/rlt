@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket Client</title>
+</head>
+<body>
+  <script>
+    const socket = new WebSocket('ws://kaichao.localhost:3001');
+
+    socket.addEventListener('open', (event) => {
+      console.log('Connected to the WebSocket server');
+    });
+
+    socket.addEventListener('message', (event) => {
+      console.log('Received message:', event.data);
+    });
+
+    socket.addEventListener('close', (event) => {
+      console.log('Connection closed');
+    });
+
+    // Send a message to the server
+    socket.send('Hello, WebSocket Server!');
+  </script>
+</body>
+</html>
