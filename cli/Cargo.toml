@@ -9,10 +9,10 @@ repository.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "3.2.14", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 localtunnel-client = { path = "../client", version = "0.1.2" }
 localtunnel-server = { path = "../server", version = "0.1.2" }
 tokio = { workspace = true }
 log = { workspace = true }
-env_logger = "0.9"
+env_logger = "0.11"
 anyhow = { workspace = true }

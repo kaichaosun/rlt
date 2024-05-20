@@ -57,7 +57,8 @@ pub async fn request_endpoint(
             }
             Err(err) => {
                 log::error!("Server error: {:?}", err);
-                return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err));
+                return HttpResponse::InternalServerError()
+                    .body(format!("Server Error: {:?}", err));
             }
         };
     }

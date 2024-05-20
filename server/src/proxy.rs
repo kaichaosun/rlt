@@ -31,6 +31,7 @@ pub async fn proxy_handler(
         .ok_or(ServerError::ProxyNotReady)?;
     let mut client = client.lock().await;
     let client_stream = client.take().await.ok_or(ServerError::EmptyConnection)?;
+    let client_stream = hyper_util::rt::TokioIo::new(client_stream);
 
     if !req.headers().contains_key(UPGRADE) {
         let (mut sender, conn) = hyper::client::conn::http1::handshake(client_stream).await?;
@@ -71,7 +72,7 @@ pub async fn proxy_handler(
                 .to_str()?
                 .to_string();
             if request_upgrade_type == response_upgrade_type {
-                let mut response_upgraded = response
+                let response_upgraded = response
                     .extensions_mut()
                     .remove::<OnUpgrade>()
                     .ok_or(ServerError::NoUpgradeExtension)?
@@ -81,7 +82,11 @@ pub async fn proxy_handler(
 
                 tokio::spawn(async move {
                     match request_upgraded.await {
-                        Ok(mut request_upgraded) => {
+                        Ok(request_upgraded) => {
+                            let mut response_upgraded =
+                                hyper_util::rt::TokioIo::new(response_upgraded);
+                            let mut request_upgraded =
+                                hyper_util::rt::TokioIo::new(request_upgraded);
                             if let Err(err) = tokio::io::copy_bidirectional(
                                 &mut response_upgraded,
                                 &mut request_upgraded,
