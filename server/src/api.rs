@@ -122,7 +122,7 @@ mod tests {
         ];
 
         for endpoint in endpoints {
-            assert_eq!(validate_endpoint(endpoint).unwrap(), true);
+            assert!(validate_endpoint(endpoint).unwrap());
         }
     }
 }

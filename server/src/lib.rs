@@ -28,7 +28,7 @@ mod state;
 lazy_static! {
     static ref CONFIG: Config = {
         dotenv().ok();
-        envy::from_env::<Config>().unwrap_or(Config::default())
+        envy::from_env::<Config>().unwrap_or_default()
     };
 }
 
