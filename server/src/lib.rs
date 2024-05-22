@@ -28,7 +28,7 @@ mod state;
 lazy_static! {
     static ref CONFIG: Config = {
         dotenv().ok();
-        envy::from_env::<Config>().unwrap_or(Config::default())
+        envy::from_env::<Config>().unwrap_or_default()
     };
 }
 
@@ -84,7 +84,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
 
                     tokio::spawn(async move {
                         if let Err(err) = http1::Builder::new()
-                            .serve_connection(stream, service)
+                            .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
                             .with_upgrades()
                             .await
                         {

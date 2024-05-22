@@ -57,7 +57,8 @@ pub async fn request_endpoint(
             }
             Err(err) => {
                 log::error!("Server error: {:?}", err);
-                return HttpResponse::InternalServerError().body(format!("Server Error: {:?}", err));
+                return HttpResponse::InternalServerError()
+                    .body(format!("Server Error: {:?}", err));
             }
         };
     }
@@ -121,7 +122,7 @@ mod tests {
         ];
 
         for endpoint in endpoints {
-            assert_eq!(validate_endpoint(endpoint).unwrap(), true);
+            assert!(validate_endpoint(endpoint).unwrap());
         }
     }
 }
