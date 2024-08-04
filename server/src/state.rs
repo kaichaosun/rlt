@@ -69,10 +69,12 @@ impl Client {
                         log::info!("new client connection: {:?}", addr);
 
                         let mut sockets = sockets.lock().await;
-                        log::debug!("Sockets length: {}", sockets.len());
-                        if sockets.len() < max_sockets as usize {
-                            log::debug!("Add a new socket, max: {}", max_sockets);
+                        let sockets_len = sockets.len();
+                        if sockets_len < max_sockets as usize {
+                            log::debug!("Add a new socket {}/{max_sockets}", sockets_len + 1,);
                             sockets.push(socket)
+                        } else {
+                            log::warn!("Reached sockets max: {sockets_len}/{max_sockets}");
                         }
                     }
                     Err(e) => log::info!("Couldn't get client: {:?}", e),
@@ -85,6 +87,7 @@ impl Client {
 
     pub async fn take(&mut self) -> Option<TcpStream> {
         let mut sockets = self.available_sockets.lock().await;
+        log::debug!("try using socket {}/{}", sockets.len(), self.max_sockets);
         sockets.pop()
     }
 }
