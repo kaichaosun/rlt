@@ -45,7 +45,7 @@ jobs:
           path: |
             ${{ steps.compile.outputs.BUILT_ARCHIVE }}
             ${{ steps.compile.outputs.BUILT_CHECKSUM }}
-#   build-client:
+#   build-macos:
 #     name: "Release - Linux - ${{ matrix.target }}"
 #     runs-on: ubuntu-latest
 #     strategy:
