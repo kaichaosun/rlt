@@ -118,7 +118,6 @@ jobs:
            images: |
              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
            tags: |
-             type=raw,pattern={{version}}
              type=ref,event=tag
 
         - name: Login to Container Registry
