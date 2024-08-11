@@ -10,7 +10,7 @@ env:
 permissions:
   contents: write
 jobs:
-  build-server:
+  build:
     name: "Release - Linux - ${{ matrix.target }}"
     runs-on: ubuntu-latest
     strategy:
@@ -29,7 +29,7 @@ jobs:
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           UPLOAD_MODE: none
-          SRC_DIR: ./server
+          SRC_DIR: ./cli
           ARCHIVE_TYPES: "${{ matrix.archive }}"
           ARCHIVE_NAME: "${{ github.event.repository.name }}-${{ matrix.target }}"
           MINIFY: true
@@ -43,36 +43,36 @@ jobs:
           path: |
             ${{ steps.compile.outputs.BUILT_ARCHIVE }}
             ${{ steps.compile.outputs.BUILT_CHECKSUM }}
-  build-client:
-    name: "Release - Linux - ${{ matrix.target }}"
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-pc-windows-gnu
-            archive: zip
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz
-          - target: x86_64-apple-darwin
-            archive: zip
-    steps:
-      - name: Compile and release
-        id: compile
-        uses: rust-build/rust-build.action@v1.4.5
-        env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-          UPLOAD_MODE: none
-          SRC_DIR: ./client
-          ARCHIVE_TYPES: "${{ matrix.archive }}"
-          ARCHIVE_NAME: "${{ github.event.repository.name }}-${{ matrix.target }}"
-          MINIFY: true
-        with:
-          RUSTTARGET: "${{ matrix.target }}"
-          EXTRA_FILES: README.md LICENSE
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: Binary
-          path: |
-            ${{ steps.compile.outputs.BUILT_ARCHIVE }}
-            ${{ steps.compile.outputs.BUILT_CHECKSUM }}
+#   build-client:
+#     name: "Release - Linux - ${{ matrix.target }}"
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         include:
+#           - target: x86_64-pc-windows-gnu
+#             archive: zip
+#           - target: x86_64-unknown-linux-musl
+#             archive: tar.gz
+#           - target: x86_64-apple-darwin
+#             archive: zip
+#     steps:
+#       - name: Compile and release
+#         id: compile
+#         uses: rust-build/rust-build.action@v1.4.5
+#         env:
+#           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+#           UPLOAD_MODE: none
+#           SRC_DIR: ./client
+#           ARCHIVE_TYPES: "${{ matrix.archive }}"
+#           ARCHIVE_NAME: "${{ github.event.repository.name }}-${{ matrix.target }}"
+#           MINIFY: true
+#         with:
+#           RUSTTARGET: "${{ matrix.target }}"
+#           EXTRA_FILES: README.md LICENSE
+#       - name: Upload artifact
+#         uses: actions/upload-artifact@v3
+#         with:
+#           name: Binary
+#           path: |
+#             ${{ steps.compile.outputs.BUILT_ARCHIVE }}
+#             ${{ steps.compile.outputs.BUILT_CHECKSUM }}
