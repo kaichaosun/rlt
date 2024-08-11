@@ -13,8 +13,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-pc-windows-gnu
-            archive: zip
+        #   - target: x86_64-pc-windows-gnu
+        #     archive: zip
           - target: x86_64-unknown-linux-musl
             archive: tar.gz
     steps:
@@ -66,49 +66,49 @@ jobs:
         with:
             files: ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.zip
 
-  build-aarch64:
-    name: "Release - Arm - ${{ matrix.target }}"
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-unknown-linux-musl
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
+#   build-aarch64:
+#     name: "Release - Arm - ${{ matrix.target }}"
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         include:
+#           - target: aarch64-unknown-linux-musl
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+#       - uses: dtolnay/rust-toolchain@stable
+#         with:
+#           toolchain: stable
+#           targets: ${{ matrix.target }}
       
-      - name: Install aarch64 OpenSSL
-        run: |
-          wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1k.tar.gz
-          tar zxf OpenSSL_1_1_1k.tar.gz
-          cd openssl-OpenSSL_1_1_1k
-          ./Configure linux-aarch64 --prefix=/openssl no-shared
-          make -j$(nproc)
-          make install_sw
+#       - name: Install aarch64 OpenSSL
+#         run: |
+#           wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1k.tar.gz
+#           tar zxf OpenSSL_1_1_1k.tar.gz
+#           cd openssl-OpenSSL_1_1_1k
+#           ./Configure linux-aarch64 --prefix=/openssl no-shared
+#           make -j$(nproc)
+#           make install_sw
                 
-      - name: Install cross
-        run: cargo install cross
-      - name: Build with cross
-        env:
-          OPENSSL_DIR: /openssl
-          OPENSSL_INCLUDE_DIR: /openssl/include
-          OPENSSL_LIB_DIR: /openssl/lib
-          PKG_CONFIG_PATH: /openssl/lib/pkgconfig
-          OPENSSL_STATIC: 1
-        run: cross build --release --target ${{ matrix.target }}
-      - name: Archive binary
-        run: |
-            tar caf ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz target/${{ matrix.target }}/release/localtunnel
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-            files: ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz
+#       - name: Install cross
+#         run: cargo install cross
+#       - name: Build with cross
+#         env:
+#           OPENSSL_DIR: /openssl
+#           OPENSSL_INCLUDE_DIR: /openssl/include
+#           OPENSSL_LIB_DIR: /openssl/lib
+#           PKG_CONFIG_PATH: /openssl/lib/pkgconfig
+#           OPENSSL_STATIC: 1
+#         run: cross build --release --target ${{ matrix.target }}
+#       - name: Archive binary
+#         run: |
+#             tar caf ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz target/${{ matrix.target }}/release/localtunnel
+#       - name: Upload release assets
+#         uses: softprops/action-gh-release@v2
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         with:
+#             files: ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz
 
   post-linux-build:
     name: Post-Linux Build Steps
