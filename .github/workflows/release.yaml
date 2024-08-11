@@ -47,7 +47,7 @@ jobs:
             ${{ steps.compile.outputs.BUILT_CHECKSUM }}
   build-macos:
     name: "Release - Linux - ${{ matrix.target }}"
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     strategy:
       matrix:
         include:
