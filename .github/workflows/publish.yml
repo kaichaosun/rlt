@@ -1,9 +1,11 @@
 name: Release
 
 on:
-    push:
-        tags:
-          - "v*.*.*"
+    # push:
+        # tags:
+        #   - "v*.*.*"
+  release:
+    types: [created, published]
 permissions:
   contents: write
 jobs:
@@ -11,6 +13,8 @@ jobs:
     name: Release - ${{ matrix.platform.release_for }}
     strategy:
       matrix:
+        os: [macos-latest, ubuntu-latest]
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
         platform:
           - release_for: Arm-32
             os: ubuntu-latest
@@ -29,9 +33,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@v0.0.13
         with:
-          command: ${{ matrix.platform.command }}
+          command: build
           target: ${{ matrix.platform.target }}
           args: "--locked --release"
       - name: Package as archive
