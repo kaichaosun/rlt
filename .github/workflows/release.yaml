@@ -80,7 +80,10 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
-      - run: cargo build --release --target "${{ matrix.target }}"
+      - name: Install cross
+        run: cargo install cross
+      - name: Build with cross
+        run: cross build --release --target ${{ matrix.target }}
       - name: Archive binary
         run: |
             tar caf ${{ github.event.repository.name }}-${{ matrix.target }}.tar.gz target/${{ matrix.target }}/release/localtunnel
