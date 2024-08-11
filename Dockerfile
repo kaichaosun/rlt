@@ -20,9 +20,6 @@ ENV DOMAIN=init.so
 ENV PORT=3000
 ENV PROXY_PORT=3001
 
-# Install debugging tools
-RUN apk add --no-cache strace gdb
-
 # Expose the ports
 EXPOSE ${PORT}
 EXPOSE ${PROXY_PORT}
