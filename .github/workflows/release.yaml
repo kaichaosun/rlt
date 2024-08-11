@@ -150,7 +150,7 @@ jobs:
             push: true
             tags: ${{ steps.meta.outputs.tags }}
             labels: ${{ steps.meta.outputs.labels }}
-            build-args: ${{github.ref_name}}
+            build-args: RLT_VERSION=${{github.ref_name}}
         
         - name: Run Docker image for debugging
           run: |
