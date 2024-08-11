@@ -56,7 +56,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --target ${{ matrix.target }}"
+      - run: cargo build --release --target "${{ matrix.target }}"
       - name: Zip binary
         run: zip -9r ${{ github.event.repository.name }}-${{ matrix.target }}.zip target/${{ matrix.target }}/release/localtunnel
       - name: Upload artifact
