@@ -23,6 +23,8 @@ jobs:
           - target: x86_64-apple-darwin
             archive: zip
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       - name: Compile and release
         id: compile
         uses: rust-build/rust-build.action@v1.4.5
