@@ -1,0 +1,79 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+
+env:
+    REGISTRY: ghcr.io
+    IMAGE_NAME: ${{ github.repository }}
+    IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}
+
+permissions:
+    contents: write
+    # packages: write
+    
+jobs:
+  build-macos:
+    name: Release - Macos - ${{ matrix.target.name }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build
+        run: |
+          # Add your build commands here
+          echo "Building for ${{ matrix.target }}"
+
+      - name: Compile and release
+        id: compile
+        uses: rust-build/rust-build.action@v1.4.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLOAD_MODE: none
+          ARCHIVE_TYPES: "tar.gz"
+          ARCHIVE_NAME: ${{ github.event.repository.name }}-${{ matrix.target }}
+        with:
+          RUSTTARGET: ${{ matrix.target }}
+          EXTRA_FILES: "README.md LICENSE"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ${{ steps.compile.outputs.BUILT_ARCHIVE }}
+
+  build-linux:
+    name: Release - Linux - ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [arm-unknown-linux-gnueabihf, x86_64-unknown-linux-gnu]
+    steps:
+        - uses: actions/checkout@v2
+        - name: Build
+          run: |
+            # Add your build commands here
+            echo "Building for ${{ matrix.target }}"
+  
+        - name: Compile and release
+          id: compile
+          uses: rust-build/rust-build.action@v1.4.5
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            UPLOAD_MODE: none
+            ARCHIVE_TYPES: "tar.gz"
+            ARCHIVE_NAME: ${{ github.event.repository.name }}-${{ matrix.target }}
+          with:
+            RUSTTARGET: ${{ matrix.target }}
+            EXTRA_FILES: "README.md LICENSE"
+  
+        - name: Upload release assets
+          uses: softprops/action-gh-release@v2
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          with:
+            files: ${{ steps.compile.outputs.BUILT_ARCHIVE }}
