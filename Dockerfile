@@ -1,16 +1,32 @@
-FROM rust:1.70-slim-buster as build
+FROM alpine:3.20 AS downloader
+
+# Define build argument for version
+ARG RLT_VERSION
 
 WORKDIR /app
-RUN apt-get update && apt-get install --assume-yes pkg-config libssl-dev
-COPY ./Cargo.lock ./Cargo.lock
-COPY ./Cargo.toml ./Cargo.toml
 
-ADD ./server ./server
-ADD ./client ./client
-ADD ./cli ./cli
-RUN OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1 cargo build --release
+# Install necessary tools
+RUN apk add --no-cache curl tar
 
+RUN curl -L https://github.com/zeroows/rlt/releases/download/v${RLT_VERSION}/rlt-x86_64-unknown-linux-musl.tar.gz | tar xz
 
-FROM debian:10.13-slim
-RUN apt update && apt install -y openssl
-COPY --from=build /app/target/release/localtunnel /usr/local/bin
+FROM alpine:3.20
+
+WORKDIR /app
+
+COPY --from=downloader /app/localtunnel /app
+
+ENV DOMAIN=init.so
+ENV PORT=3000
+ENV PROXY_PORT=3001
+
+# Install debugging tools
+RUN apk add --no-cache strace gdb
+
+# Expose the ports
+EXPOSE ${PORT}
+EXPOSE ${PROXY_PORT}
+
+# Run with strace to capture system calls
+ENTRYPOINT ["strace", "-f", "-e", "trace=all", "-s", "1024", "/app/localtunnel"]
+CMD ["server", "--domain", "${DOMAIN}", "--port", "${PORT}", "--proxy-port", "${PROXY_PORT}", "--secure"]
