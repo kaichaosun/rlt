@@ -8,7 +8,7 @@ WORKDIR /app
 # Install necessary tools
 RUN apk add --no-cache curl tar
 
-RUN curl -L https://github.com/zeroows/rlt/releases/download/v${RLT_VERSION}/rlt-x86_64-unknown-linux-musl.tar.gz | tar xz
+RUN curl -L https://github.com/zeroows/rlt/releases/download/${RLT_VERSION}/rlt-x86_64-unknown-linux-musl.tar.gz | tar xz
 
 FROM alpine:3.20
 

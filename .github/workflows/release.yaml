@@ -28,7 +28,7 @@ jobs:
           UPLOAD_MODE: none
           SRC_DIR: ./cli
           ARCHIVE_TYPES: "${{ matrix.archive }}"
-          ARCHIVE_NAME: "${{ github.event.repository.name }}-${{ matrix.target }}"
+          ARCHIVE_NAME: "${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}"
           MINIFY: true
         with:
           RUSTTARGET: "${{ matrix.target }}"
@@ -57,14 +57,14 @@ jobs:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target "${{ matrix.target }}"
       - name: Archive binary
-        run: zip -9r ${{ github.event.repository.name }}-${{ matrix.target }}.zip target/${{ matrix.target }}/release/localtunnel
+        run: zip -9r ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.zip target/${{ matrix.target }}/release/localtunnel
      
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-            files: ${{ github.event.repository.name }}-${{ matrix.target }}.zip
+            files: ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.zip
 
   build-aarch64:
     name: "Release - Arm - ${{ matrix.target }}"
@@ -86,13 +86,13 @@ jobs:
         run: cross build --release --target ${{ matrix.target }}
       - name: Archive binary
         run: |
-            tar caf ${{ github.event.repository.name }}-${{ matrix.target }}.tar.gz target/${{ matrix.target }}/release/localtunnel
+            tar caf ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz target/${{ matrix.target }}/release/localtunnel
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-            files: ${{ github.event.repository.name }}-${{ matrix.target }}.tar.gz
+            files: ${{ github.event.repository.name }}-${{github.ref_name}}-${{ matrix.target }}.tar.gz
 
   post-linux-build:
     name: Post-Linux Build Steps
@@ -118,8 +118,8 @@ jobs:
            images: |
              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
            tags: |
-             type=semver,pattern={{version}}
-             type=sha
+             type=raw,pattern={{version}}
+             type=ref,event=tag
 
         - name: Login to Container Registry
           uses: docker/login-action@v3
@@ -129,12 +129,13 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
         
         - name: Build and push Docker image
-          uses: docker/build-push-action@v5
+          uses: docker/build-push-action@v6
           with:
             context: .
             push: true
             tags: ${{ steps.meta.outputs.tags }}
             labels: ${{ steps.meta.outputs.labels }}
+            build-args: ${{github.ref_name}}
         
         - name: Run Docker image for debugging
           run: |
