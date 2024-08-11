@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    name: Release - Linux - ${{ matrix.target.name }}
+    name: Release - Linux - ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
