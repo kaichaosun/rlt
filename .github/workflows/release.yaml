@@ -38,13 +38,14 @@ jobs:
         with:
           RUSTTARGET: "${{ matrix.target }}"
           EXTRA_FILES: README.md LICENSE
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4.3.6
+    
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: Binary
-          path: |
-            ${{ steps.compile.outputs.BUILT_ARCHIVE }}
-            ${{ steps.compile.outputs.BUILT_CHECKSUM }}
+            files: ${{ steps.compile.outputs.BUILT_ARCHIVE }}
+
   build-macos:
     name: "Release - Macos - ${{ matrix.target }}"
     runs-on: macos-latest
@@ -63,9 +64,10 @@ jobs:
       - run: cargo build --release --target "${{ matrix.target }}"
       - name: Zip binary
         run: zip -9r ${{ github.event.repository.name }}-${{ matrix.target }}.zip target/${{ matrix.target }}/release/localtunnel
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
+     
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: Binary
-          path: |
-            ${{ github.event.repository.name }}-${{ matrix.target }}.zip
+            files: ${{ github.event.repository.name }}-${{ matrix.target }}.zip
