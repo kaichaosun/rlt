@@ -86,7 +86,7 @@ jobs:
           wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1k.tar.gz
           tar zxf OpenSSL_1_1_1k.tar.gz
           cd openssl-OpenSSL_1_1_1k
-          ./Configure linux-aarch64 --prefix=openssl no-shared
+          ./Configure linux-aarch64 --prefix=/openssl no-shared
           make -j$(nproc)
           make install_sw
                 
@@ -94,10 +94,10 @@ jobs:
         run: cargo install cross
       - name: Build with cross
         env:
-          OPENSSL_DIR: openssl
-          OPENSSL_INCLUDE_DIR: openssl/include
-          OPENSSL_LIB_DIR: openssl/lib
-          PKG_CONFIG_PATH: openssl/lib/pkgconfig
+          OPENSSL_DIR: /openssl
+          OPENSSL_INCLUDE_DIR: /openssl/include
+          OPENSSL_LIB_DIR: /openssl/lib
+          PKG_CONFIG_PATH: /openssl/lib/pkgconfig
           OPENSSL_STATIC: 1
         run: cross build --release --target ${{ matrix.target }}
       - name: Archive binary
