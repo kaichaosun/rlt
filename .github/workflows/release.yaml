@@ -151,31 +151,3 @@ jobs:
             tags: ${{ steps.meta.outputs.tags }}
             labels: ${{ steps.meta.outputs.labels }}
             build-args: RLT_VERSION=${{github.ref_name}}
-        
-        - name: Run Docker image for debugging
-          run: |
-            docker run --name debug_container -d ${{ steps.meta.outputs.tags }}
-            sleep 10
-            docker logs debug_container
-        
-        - name: Capture core dump
-          if: failure()
-          run: |
-            docker cp debug_container:/core ./core
-            docker cp debug_container:/app/localtunnel ./localtunnel
-        
-        - name: Analyze core dump
-          if: failure()
-          run: |
-            sudo apt-get update && sudo apt-get install -y gdb
-            gdb ./localtunnel ./core -ex "thread apply all bt" -ex "quit" > backtrace.txt
-        
-        - name: Upload debug artifacts
-          if: failure()
-          uses: actions/upload-artifact@v3
-          with:
-            name: debug-artifacts
-            path: |
-              ./core
-              ./localtunnel
-              ./backtrace.txt
