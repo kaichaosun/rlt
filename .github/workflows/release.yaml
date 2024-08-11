@@ -46,7 +46,7 @@ jobs:
             ${{ steps.compile.outputs.BUILT_ARCHIVE }}
             ${{ steps.compile.outputs.BUILT_CHECKSUM }}
   build-macos:
-    name: "Release - Linux - ${{ matrix.target }}"
+    name: "Release - Macos - ${{ matrix.target }}"
     runs-on: macos-latest
     strategy:
       matrix:
@@ -56,6 +56,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+    #   - run: rustup target add x86_64-apple-darwin
       - run: cargo build --release --target "${{ matrix.target }}"
       - name: Zip binary
         run: zip -9r ${{ github.event.repository.name }}-${{ matrix.target }}.zip target/${{ matrix.target }}/release/localtunnel
