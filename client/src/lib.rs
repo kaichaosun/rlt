@@ -3,7 +3,7 @@ use tokio::sync::Semaphore;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::io;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
 
@@ -168,26 +168,10 @@ async fn handle_connection(
     local_port: u16,
 ) -> Result<()> {
     log::debug!("Connect to remote: {}, {}", remote_host, remote_port);
-    let remote_stream = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
+    let mut remote_stream = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
     log::debug!("Connect to local: {}, {}", local_host, local_port);
-    let local_stream = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
+    let mut local_stream = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
 
-    proxy(remote_stream, local_stream).await?;
-    Ok(())
-}
-
-/// Copy data mutually between two read/write streams.
-async fn proxy<S1, S2>(stream1: S1, stream2: S2) -> io::Result<()>
-where
-    S1: AsyncRead + AsyncWrite + Unpin,
-    S2: AsyncRead + AsyncWrite + Unpin,
-{
-    let (mut s1_read, mut s1_write) = io::split(stream1);
-    let (mut s2_read, mut s2_write) = io::split(stream2);
-    tokio::select! {
-        res = io::copy(&mut s1_read, &mut s2_write) => res,
-        res = io::copy(&mut s2_read, &mut s1_write) => res,
-    }?;
-
+    io::copy_bidirectional(&mut remote_stream, &mut local_stream).await?;
     Ok(())
 }
