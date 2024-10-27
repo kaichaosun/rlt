@@ -1074,6 +1074,7 @@ dependencies = [
  "regex",
  "reqwest",
  "serde",
+ "socket2",
  "thiserror",
  "tokio",
 ]

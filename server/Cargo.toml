@@ -27,3 +27,4 @@ dotenv = "0.15.0"
 thiserror = "1.0"
 async-trait = "0.1"
 regex = "1.7.0"
+socket2 = { workspace = true }
