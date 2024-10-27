@@ -3,14 +3,19 @@ use tokio::sync::Semaphore;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::io;
 use tokio::net::TcpStream;
-use tokio::time::{sleep, Duration};
-
 pub use tokio::sync::broadcast;
+use tokio::time::{sleep, Duration};
 
 pub const PROXY_SERVER: &str = "https://init.so";
 pub const LOCAL_HOST: &str = "127.0.0.1";
+
+// See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.
+const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const TCP_KEEPALIVE_RETRIES: u32 = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyResponse {
@@ -171,6 +176,14 @@ async fn handle_connection(
     let mut remote_stream = TcpStream::connect(format!("{}:{}", remote_host, remote_port)).await?;
     log::debug!("Connect to local: {}, {}", local_host, local_port);
     let mut local_stream = TcpStream::connect(format!("{}:{}", local_host, local_port)).await?;
+
+    // configure keepalive on remote socket to early detect network issues and attempt to re-establish the connection.
+    let ka = TcpKeepalive::new()
+        .with_time(TCP_KEEPALIVE_TIME)
+        .with_interval(TCP_KEEPALIVE_INTERVAL)
+        .with_retries(TCP_KEEPALIVE_RETRIES);
+    let sf = SockRef::from(&remote_stream);
+    sf.set_tcp_keepalive(&ka)?;
 
     io::copy_bidirectional(&mut remote_stream, &mut local_stream).await?;
     Ok(())

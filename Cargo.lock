@@ -1054,6 +1054,7 @@ dependencies = [
  "log",
  "reqwest",
  "serde",
+ "socket2",
  "tokio",
 ]
 
