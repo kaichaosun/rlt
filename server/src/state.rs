@@ -5,6 +5,7 @@ use tokio::{
     io::Interest,
     net::{TcpListener, TcpStream},
     sync::Mutex,
+    time::timeout,
 };
 
 // See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.
@@ -71,12 +72,13 @@ impl Client {
         tokio::spawn(async move {
             // TODO check client is authenticated for the port
             loop {
-                match listener.accept().await {
-                    Ok((socket, addr)) => {
+                match timeout(Duration::from_secs(20), listener.accept()).await {
+                    Ok(Ok((socket, addr))) => {
                         log::info!("new client connection: {:?}", addr);
 
                         let mut sockets = sockets.lock().await;
                         let sockets_len = sockets.len();
+
                         if sockets_len < max_sockets as usize {
                             log::debug!("Add a new socket {}/{max_sockets}", sockets_len + 1,);
 
@@ -94,7 +96,26 @@ impl Client {
                             log::warn!("Reached sockets max: {sockets_len}/{max_sockets}");
                         }
                     }
-                    Err(e) => log::info!("Couldn't get client: {:?}", e),
+                    Ok(Err(e)) => log::info!("Couldn't get client: {:?}", e),
+                    Err(_) => {
+                        // timeout clean up timeout connections
+                        let mut sockets = sockets.lock().await;
+                        let sockets_len = sockets.len();
+                        let mut connected_sockets = vec![];
+                        while let Some(s) = sockets.pop() {
+                            if socket_is_writable(&s).await {
+                                connected_sockets.push(s);
+                            }
+                        }
+
+                        if sockets_len != connected_sockets.len() {
+                            log::debug!(
+                                "removed {} old disconnected sockets",
+                                sockets_len - connected_sockets.len()
+                            );
+                        }
+                        *sockets = connected_sockets;
+                    }
                 }
             }
         });
