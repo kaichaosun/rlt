@@ -15,6 +15,7 @@ pub const LOCAL_HOST: &str = "127.0.0.1";
 // See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.
 const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+#[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,8 +181,9 @@ async fn handle_connection(
     // configure keepalive on remote socket to early detect network issues and attempt to re-establish the connection.
     let ka = TcpKeepalive::new()
         .with_time(TCP_KEEPALIVE_TIME)
-        .with_interval(TCP_KEEPALIVE_INTERVAL)
-        .with_retries(TCP_KEEPALIVE_RETRIES);
+        .with_interval(TCP_KEEPALIVE_INTERVAL);
+    #[cfg(not(target_os = "windows"))]
+    let ka = ka.with_retries(TCP_KEEPALIVE_RETRIES);
     let sf = SockRef::from(&remote_stream);
     sf.set_tcp_keepalive(&ka)?;
 

@@ -6,14 +6,16 @@ on:
           - main
         paths-ignore:
           - '.github/workflows/publish.yml'
-          - '.github/workflows/test.yml'
           - '.github/FUNDING.yml'
           - '**README.md'
           - '.gitignore'
           - 'LICENSE'
 jobs:
     tests-package:
-        runs-on: ubuntu-latest
+        strategy:
+          matrix:
+            os: [ubuntu-latest, macOS-latest, windows-latest]
+        runs-on: ${{ matrix.os }}
         steps:
             - name: Checkout
               uses: actions/checkout@v3

@@ -11,6 +11,7 @@ use tokio::{
 // See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.
 const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+#[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
 
 /// App state holds all the client connection and status info.
@@ -84,8 +85,9 @@ impl Client {
 
                             let ka = TcpKeepalive::new()
                                 .with_time(TCP_KEEPALIVE_TIME)
-                                .with_interval(TCP_KEEPALIVE_INTERVAL)
-                                .with_retries(TCP_KEEPALIVE_RETRIES);
+                                .with_interval(TCP_KEEPALIVE_INTERVAL);
+                            #[cfg(not(target_os = "windows"))]
+                            let ka = ka.with_retries(TCP_KEEPALIVE_RETRIES);
                             let sf = SockRef::from(&socket);
                             if let Err(err) = sf.set_tcp_keepalive(&ka) {
                                 log::warn!("failed to enable TCP keepalive: {err}");
