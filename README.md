@@ -18,7 +18,7 @@ Use in CLI:
 ```shell
 cargo install localtunnel
 
-localtunnel client --host https://init.so --subdomain kaichao --port 3000
+localtunnel client --host https://your-domain.com --subdomain kaichao --port 3000
 ```
 
 Use as a Rust library:
@@ -33,7 +33,7 @@ use localtunnel_client::{open_tunnel, broadcast, ClientConfig};
 let (notify_shutdown, _) = broadcast::channel(1);
 
 let config = ClientConfig {
-    server: Some("https://init.so".to_string()),
+    server: Some("https://your-domain.com".to_string()),
     subdomain: Some("demo".to_string()),
     local_host: Some("localhost".to_string()),
     local_port: 3000,
@@ -52,7 +52,7 @@ let _ = notify_shutdown.send(());
 Use in CLI:
 
 ```shell
-localtunnel server --domain init.so --port 3000 --proxy-port 3001 --secure
+localtunnel server --domain your-domain.com --port 3000 --proxy-port 3001 --secure
 ```
 
 Use as a Rust library,
@@ -65,7 +65,7 @@ cargo install localtunnel-server
 use localtunnel_server::{start, ServerConfig};
 
 let config = ServerConfig {
-    domain: "init.so".to_string(),
+    domain: "your-domain.com".to_string(),
     api_port: 3000,
     secure: true,
     max_sockets: 10,

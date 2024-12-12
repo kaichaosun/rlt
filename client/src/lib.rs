@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 pub use tokio::sync::broadcast;
 use tokio::time::{sleep, Duration};
 
-pub const PROXY_SERVER: &str = "https://init.so";
+pub const PROXY_SERVER: &str = "https://your-domain.com";
 pub const LOCAL_HOST: &str = "127.0.0.1";
 
 // See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.

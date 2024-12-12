@@ -2,13 +2,13 @@
 
 ## Configure Domain
 
-Add A record `*.proxy.init.so`, the value is server IP.
-Add A record `proxy.init.so`, the value is server IP.
+Add A record `*.proxy.your-domain.com`, the value is server IP.
+Add A record `proxy.your-domain.com`, the value is server IP.
 
 You can now login the server with SSH,
 
 ```
-ssh ubuntu@proxy.init.so
+ssh ubuntu@proxy.your-domain.com
 ```
 
 ## Install Rust and localtunnel
@@ -27,7 +27,7 @@ export CLOUDFLARE_NAMESPACE=xxx
 export CLOUDFLARE_AUTH_EMAIL=xxx
 export CLOUDFLARE_AUTH_KEY=xxx
 
-localtunnel server --domain proxy.init.so --port 3000 --proxy-port 3001 --secure --require-auth
+localtunnel server --domain proxy.your-domain.com --port 3000 --proxy-port 3001 --secure --require-auth
 ```
 
 *Known issues:*
@@ -54,7 +54,7 @@ Environment="CLOUDFLARE_AUTH_EMAIL=xxx"
 Environment="CLOUDFLARE_AUTH_KEY=xxx"
 Environment="RUST_LOG=debug"
 Environment="RUST_BACKTRACE=1"
-ExecStart=/root/.cargo/bin/localtunnel server --domain proxy.init.so --port 3000 --proxy-port 3001 --secure --require-auth
+ExecStart=/root/.cargo/bin/localtunnel server --domain proxy.your-domain.com --port 3000 --proxy-port 3001 --secure --require-auth
 Restart=always
 RestartSec=10
 
@@ -92,14 +92,14 @@ touch Caddyfile
 ```
 
 ```
-proxy.init.so {
+proxy.your-domain.com {
   reverse_proxy http://127.0.0.1:3000
   tls {
     on_demand
   }
 }
 
-*.proxy.init.so {
+*.proxy.your-domain.com {
   reverse_proxy http://127.0.0.1:3001
   tls {
     on_demand
