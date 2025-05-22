@@ -1,6 +1,6 @@
-/// Start a localtunnel server,
-/// request a proxy endpoint at `domain.tld/<your-endpoint>`,
-/// user's request then proxied via `<your-endpoint>.domain.tld`.
+//! Start a localtunnel server,
+//! request a proxy endpoint at `domain.tld/<your-endpoint>`,
+//! user's request then proxied via `<your-endpoint>.domain.tld`.
 
 #[macro_use]
 extern crate lazy_static;
