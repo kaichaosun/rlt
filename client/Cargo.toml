@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel-client"
-version = "0.1.5"
+version = "0.1.6"
 edition.workspace = true
 description = "A client to connect with localtunnel server."
 license.workspace = true
