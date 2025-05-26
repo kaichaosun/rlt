@@ -29,11 +29,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: ${{ matrix.platform.command }}
           target: ${{ matrix.platform.target }}
           args: "--locked --release"
+          cross-version: "v0.2.5"
       - name: Package as archive
         shell: bash
         run:  |
@@ -41,7 +42,7 @@ jobs:
           tar czvf ../../../${{ matrix.platform.name }} ${{ matrix.platform.bin }}
           cd -
       - name: Upload package as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: ${{ matrix.platform.name }}
@@ -52,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binaries
           path: ./binaries
