@@ -1,10 +1,16 @@
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::Interest,
     net::{TcpListener, TcpStream},
     sync::Mutex,
+    task::JoinHandle,
     time::timeout,
 };
 
@@ -13,6 +19,9 @@ const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
+
+/// How long before an unused client is cleaned up.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// App state holds all the client connection and status info.
 pub struct State {
@@ -45,12 +54,32 @@ impl ClientManager {
         let mut client = client.lock().await;
         client.listen().await
     }
+
+    /// clean up old unused clients
+    pub async fn cleanup(&mut self) {
+        let mut to_remove = vec![];
+
+        for (url, client) in self.clients.iter() {
+            let client = client.lock().await;
+            if client.should_cleanup().await {
+                to_remove.push(url.clone());
+            }
+        }
+
+        for url in to_remove {
+            log::debug!("cleanup client {url}");
+            self.clients.remove(url.as_str());
+        }
+    }
 }
 
 pub struct Client {
     pub available_sockets: Arc<Mutex<Vec<TcpStream>>>,
     pub port: Option<u16>,
     pub max_sockets: u8,
+    listen_task: Option<JoinHandle<()>>,
+    /// last time a new connection was established
+    last_connection_time: Instant,
 }
 
 impl Client {
@@ -59,6 +88,8 @@ impl Client {
             available_sockets: Arc::new(Mutex::new(vec![])),
             port: None,
             max_sockets,
+            listen_task: None,
+            last_connection_time: std::time::Instant::now(),
         }
     }
 
@@ -70,7 +101,7 @@ impl Client {
         let sockets = self.available_sockets.clone();
         let max_sockets = self.max_sockets;
 
-        tokio::spawn(async move {
+        let listen_task = tokio::spawn(async move {
             // TODO check client is authenticated for the port
             loop {
                 match timeout(Duration::from_secs(20), listener.accept()).await {
@@ -121,11 +152,13 @@ impl Client {
                 }
             }
         });
+        self.listen_task = Some(listen_task);
 
         Ok(port)
     }
 
     pub async fn take(&mut self) -> Option<TcpStream> {
+        self.last_connection_time = Instant::now();
         let mut sockets = self.available_sockets.lock().await;
 
         let sockets_len = sockets.len();
@@ -148,6 +181,21 @@ impl Client {
             i -= 1;
         }
         None
+    }
+
+    /// If the client has not been used for a while and so should be cleaned up.
+    pub async fn should_cleanup(&self) -> bool {
+        let sockets = self.available_sockets.lock().await;
+
+        sockets.is_empty() && self.last_connection_time.elapsed() > CLEANUP_TIMEOUT
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        if let Some(task) = self.listen_task.take() {
+            task.abort();
+        }
     }
 }
 

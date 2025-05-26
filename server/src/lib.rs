@@ -5,13 +5,14 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 
 use actix_web::{web, App, HttpServer};
 use anyhow::Result;
 use dotenv::dotenv;
 use hyper::{server::conn::http1, service::service_fn};
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::{net::TcpListener, sync::Mutex, time::timeout};
 
 use crate::api::{api_status, request_endpoint};
 use crate::config::Config;
@@ -24,6 +25,9 @@ mod config;
 mod error;
 mod proxy;
 mod state;
+
+/// The interval between cleanup checks
+const CLEANUP_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 lazy_static! {
     static ref CONFIG: Config = {
@@ -75,8 +79,8 @@ pub async fn start(config: ServerConfig) -> Result<()> {
     let listener = TcpListener::bind(proxy_addr).await?;
     tokio::spawn(async move {
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
+            match timeout(CLEANUP_CHECK_INTERVAL, listener.accept()).await {
+                Ok(Ok((stream, _))) => {
                     log::info!("Accepted a new proxy request");
 
                     let proxy_manager = manager.clone();
@@ -92,7 +96,12 @@ pub async fn start(config: ServerConfig) -> Result<()> {
                         }
                     });
                 }
-                Err(e) => log::error!("Failed to accept the request: {:?}", e),
+                Ok(Err(e)) => log::error!("Failed to accept the request: {:?}", e),
+                Err(_) => {
+                    // timeout, cleanup old connections
+                    let mut manager = manager.lock().await;
+                    manager.cleanup().await;
+                }
             }
         }
     });
