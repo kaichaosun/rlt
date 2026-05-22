@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
                 shutdown_signal: notify_shutdown.clone(),
                 max_conn,
                 credential,
+                reregister_after: None,
             };
             let result = open_tunnel(config).await?;
             log::info!("Tunnel url: {:?}", result);
