@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 description = "A CLI to proxy with localtunnel server."
 license.workspace = true
