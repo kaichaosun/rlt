@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel-client"
-version = "0.1.7"
+version = "0.2.0"
 edition.workspace = true
 description = "A client to connect with localtunnel server."
 license.workspace = true
@@ -15,6 +15,8 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 socket2 = { workspace = true }
+snowstorm = "0.4"
+hex = "0.4"
 
 [features]
 default = ["reqwest/default"]

@@ -4,17 +4,28 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use snowstorm::{Builder, NoiseStream};
 use socket2::{SockRef, TcpKeepalive};
-use tokio::io;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 pub use tokio::sync::broadcast;
 use tokio::sync::{mpsc, Semaphore};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 pub const PROXY_SERVER: &str = "https://your-domain.com";
 pub const LOCAL_HOST: &str = "127.0.0.1";
+
+/// Noise protocol parameters for the encrypted tunnel between client and
+/// server. Must match the server exactly; NK authenticates the server by its
+/// static key (from the registration response) and derives fresh session keys
+/// per connection.
+pub const NOISE_PARAMS: &str = "Noise_NK_25519_ChaChaPoly_BLAKE2s";
+
+/// How long the tunnel handshake may take before the connection attempt is
+/// treated as a remote failure.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // See https://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO to understand how keepalive work.
 const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
@@ -36,6 +47,8 @@ struct ProxyResponse {
     port: u16,
     max_conn_count: u8,
     url: String,
+    server_public_key: String,
+    session_token: String,
 }
 
 /// The server detail for client to connect
@@ -45,6 +58,11 @@ pub struct TunnelServerInfo {
     pub port: u16,
     pub max_conn_count: u8,
     pub url: String,
+    /// The server's static Noise public key, used to authenticate the tunnel
+    /// handshake.
+    pub server_public_key: Vec<u8>,
+    /// Per-tunnel token presented on every tunnel connection.
+    pub session_token: Vec<u8>,
 }
 
 pub struct ClientConfig {
@@ -250,8 +268,7 @@ fn start_tunnel_connections(
     max_conn: u8,
     health: RoundHealth,
 ) {
-    let server_host = server.host.clone();
-    let server_port = server.port;
+    let server = Arc::new(server.clone());
     let local_host = local_host.unwrap_or_else(|| LOCAL_HOST.to_string());
 
     let count = std::cmp::min(server.max_conn_count, max_conn);
@@ -271,7 +288,7 @@ fn start_tunnel_connections(
                             return;
                         },
                     };
-                    let server_host = server_host.clone();
+                    let server = server.clone();
                     let local_host = local_host.clone();
                     let health = health.clone();
                     let mut shutdown_receiver = shutdown_signal.subscribe();
@@ -279,7 +296,7 @@ fn start_tunnel_connections(
                     tokio::spawn(async move {
                         tokio::select! {
                             _ = tunnel_one_connection(
-                                &server_host, server_port,
+                                &server,
                                 &local_host, local_port,
                                 &health,
                             ) => {}
@@ -301,21 +318,47 @@ fn start_tunnel_connections(
 }
 
 async fn tunnel_one_connection(
-    server_host: &str,
-    server_port: u16,
+    server: &TunnelServerInfo,
     local_host: &str,
     local_port: u16,
     health: &RoundHealth,
 ) {
-    log::debug!("Connecting to remote: {}:{}", server_host, server_port);
-    let remote_stream = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
-        Ok(stream) => {
-            health.record_success();
-            stream
-        }
+    log::debug!("Connecting to remote: {}:{}", server.host, server.port);
+    let remote_stream = match TcpStream::connect(format!("{}:{}", server.host, server.port)).await
+    {
+        Ok(stream) => stream,
         Err(err) => {
             let down_for = health.record_failure();
             log::error!("Remote connect failed (down for {:?}): {:?}", down_for, err);
+            sleep(Duration::from_secs(10)).await;
+            return;
+        }
+    };
+
+    // Keepalive has to be configured on the raw TCP socket, before the
+    // encrypted stream takes ownership of it.
+    if let Err(err) = set_keepalive(&remote_stream) {
+        log::warn!("failed to enable TCP keepalive: {err:?}");
+    }
+
+    // A completed handshake (server key verified, session token acknowledged)
+    // is the success signal for re-registration health: a TCP connect alone
+    // can succeed against a stale endpoint whose key or token no longer match.
+    let remote_stream = match timeout(HANDSHAKE_TIMEOUT, secure_connect(remote_stream, server)).await
+    {
+        Ok(Ok(stream)) => {
+            health.record_success();
+            stream
+        }
+        Ok(Err(err)) => {
+            let down_for = health.record_failure();
+            log::error!("Tunnel handshake failed (down for {:?}): {:?}", down_for, err);
+            sleep(Duration::from_secs(10)).await;
+            return;
+        }
+        Err(_) => {
+            let down_for = health.record_failure();
+            log::error!("Tunnel handshake timed out (down for {:?})", down_for);
             sleep(Duration::from_secs(10)).await;
             return;
         }
@@ -334,21 +377,51 @@ async fn tunnel_one_connection(
     }
 }
 
-async fn proxy_through(
-    mut remote_stream: TcpStream,
-    local_host: &str,
-    local_port: u16,
-) -> Result<()> {
-    log::debug!("Connecting to local: {}:{}", local_host, local_port);
-    let mut local_stream = TcpStream::connect(format!("{local_host}:{local_port}")).await?;
+/// Establish the encrypted tunnel: Noise NK handshake pinned to the server's
+/// static public key, then authenticate with the session token and wait for
+/// the server's one-byte acknowledgement. Without the ack, a rejected token
+/// would only surface later as a mysteriously dead proxied request.
+async fn secure_connect(
+    stream: TcpStream,
+    server: &TunnelServerInfo,
+) -> Result<NoiseStream<TcpStream>> {
+    let initiator = Builder::new(NOISE_PARAMS.parse()?)
+        .remote_public_key(&server.server_public_key)
+        .build_initiator()?;
+    let mut stream = NoiseStream::handshake(stream, initiator)
+        .await
+        .map_err(|err| anyhow!("noise handshake failed: {err:?}"))?;
 
+    stream.write_all(&server.session_token).await?;
+    stream.flush().await?;
+
+    let mut ack = [0u8; 1];
+    stream
+        .read_exact(&mut ack)
+        .await
+        .context("server rejected the session token")?;
+
+    Ok(stream)
+}
+
+fn set_keepalive(stream: &TcpStream) -> Result<()> {
     let ka = TcpKeepalive::new()
         .with_time(TCP_KEEPALIVE_TIME)
         .with_interval(TCP_KEEPALIVE_INTERVAL);
     #[cfg(not(target_os = "windows"))]
     let ka = ka.with_retries(TCP_KEEPALIVE_RETRIES);
-    let sf = SockRef::from(&remote_stream);
+    let sf = SockRef::from(stream);
     sf.set_tcp_keepalive(&ka)?;
+    Ok(())
+}
+
+async fn proxy_through(
+    mut remote_stream: NoiseStream<TcpStream>,
+    local_host: &str,
+    local_port: u16,
+) -> Result<()> {
+    log::debug!("Connecting to local: {}:{}", local_host, local_port);
+    let mut local_stream = TcpStream::connect(format!("{local_host}:{local_port}")).await?;
 
     io::copy_bidirectional(&mut remote_stream, &mut local_stream).await?;
     Ok(())
@@ -377,11 +450,18 @@ async fn get_tunnel_endpoint(
         None => host,
     };
 
+    let server_public_key = hex::decode(&resp.server_public_key)
+        .context("invalid server_public_key in registration response")?;
+    let session_token = hex::decode(&resp.session_token)
+        .context("invalid session_token in registration response")?;
+
     let tunnel_info = TunnelServerInfo {
         host: host.to_string(),
         port: resp.port,
         max_conn_count: resp.max_conn_count,
         url: resp.url,
+        server_public_key,
+        session_token,
     };
 
     Ok(tunnel_info)

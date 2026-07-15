@@ -1,6 +1,6 @@
 [package]
 name = "localtunnel-server"
-version = "0.1.7"
+version = "0.2.0"
 edition.workspace = true
 description = "Server implementation of localtunnel."
 license.workspace = true
@@ -28,3 +28,9 @@ thiserror = "1.0"
 async-trait = "0.1"
 regex = "1.7.0"
 socket2 = { workspace = true }
+snowstorm = "0.4"
+hex = "0.4"
+rand = "0.8"
+
+[dev-dependencies]
+localtunnel-client = { path = "../client" }

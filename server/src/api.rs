@@ -65,13 +65,15 @@ pub async fn request_endpoint(
 
     let mut manager = state.manager.lock().await;
     match manager.put(endpoint.to_string()).await {
-        Ok(port) => {
+        Ok((port, session_token)) => {
             let schema = if state.secure { "https" } else { "http" };
             let info = ProxyInfo {
                 id: endpoint.to_string(),
                 port,
                 max_conn_count: state.max_sockets,
                 url: format!("{}://{}.{}", schema, endpoint, state.domain),
+                server_public_key: state.public_key.clone(),
+                session_token,
             };
 
             log::debug!("Proxy info, {:?}", info);
@@ -107,6 +109,12 @@ struct ProxyInfo {
     port: u16,
     max_conn_count: u8,
     url: String,
+    /// Hex-encoded static Noise public key of the server, used by the client
+    /// to authenticate the tunnel handshake.
+    server_public_key: String,
+    /// Hex-encoded per-tunnel token the client must present on every tunnel
+    /// connection.
+    session_token: String,
 }
 
 #[cfg(test)]
