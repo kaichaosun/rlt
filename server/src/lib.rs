@@ -66,13 +66,23 @@ pub async fn start(config: ServerConfig) -> Result<()> {
         require_auth
     );
 
-    let manager = Arc::new(Mutex::new(ClientManager::new(max_sockets)));
+    // Static Noise keypair for this server process. Clients receive the
+    // public key in every registration response (over the HTTPS API), so a
+    // restart invalidating old keys is fine: clients re-register on failure.
+    let keypair = snowstorm::Builder::new(state::NOISE_PARAMS.parse()?).generate_keypair()?;
+    let public_key = hex::encode(&keypair.public);
+
+    let manager = Arc::new(Mutex::new(ClientManager::new(
+        max_sockets,
+        Arc::new(keypair),
+    )));
     let api_state = web::Data::new(State {
         manager: manager.clone(),
         max_sockets,
         require_auth,
         secure,
         domain,
+        public_key,
     });
 
     let proxy_addr: SocketAddr = ([0, 0, 0, 0], proxy_port).into();

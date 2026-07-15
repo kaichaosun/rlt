@@ -5,9 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{anyhow, Result};
+use snowstorm::{Builder, Keypair, NoiseStream};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{
-    io::Interest,
+    io::{AsyncReadExt, AsyncWriteExt, Interest},
     net::{TcpListener, TcpStream},
     sync::Mutex,
     task::JoinHandle,
@@ -23,6 +25,24 @@ const TCP_KEEPALIVE_RETRIES: u32 = 5;
 /// How long before an unused client is cleaned up.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
+/// Noise protocol parameters for the encrypted tunnel between client and
+/// server. Must match the client exactly; NK authenticates the server by its
+/// static key (delivered to the client in the registration response) and
+/// derives fresh session keys per connection.
+pub const NOISE_PARAMS: &str = "Noise_NK_25519_ChaChaPoly_BLAKE2s";
+
+/// Length of the per-tunnel session token the client must present after the
+/// handshake before its connection joins the pool.
+pub const SESSION_TOKEN_LEN: usize = 32;
+
+/// How long a connecting peer gets to finish handshake + token before being
+/// dropped, so half-open or non-speaking connections can't pile up.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A pooled tunnel connection: encrypted and already authenticated by the
+/// session token.
+pub type TunnelStream = NoiseStream<TcpStream>;
+
 /// App state holds all the client connection and status info.
 pub struct State {
     pub manager: Arc<Mutex<ClientManager>>,
@@ -30,29 +50,41 @@ pub struct State {
     pub require_auth: bool,
     pub secure: bool,
     pub domain: String,
+    /// Hex-encoded static Noise public key, handed to clients at registration.
+    pub public_key: String,
 }
 
 pub struct ClientManager {
     pub clients: HashMap<String, Arc<Mutex<Client>>>,
     pub _tunnels: u16,
     pub default_max_sockets: u8,
+    key: Arc<Keypair>,
 }
 
 impl ClientManager {
-    pub fn new(max_sockets: u8) -> Self {
+    pub fn new(max_sockets: u8, key: Arc<Keypair>) -> Self {
         ClientManager {
             clients: HashMap::new(),
             _tunnels: 0,
             default_max_sockets: max_sockets,
+            key,
         }
     }
 
-    pub async fn put(&mut self, url: String) -> io::Result<u16> {
-        let client = Arc::new(Mutex::new(Client::new(self.default_max_sockets)));
+    /// Registers a tunnel and returns the assigned port together with the
+    /// hex-encoded session token the client must present on every connection.
+    pub async fn put(&mut self, url: String) -> io::Result<(u16, String)> {
+        let session_token: [u8; SESSION_TOKEN_LEN] = rand::random();
+        let client = Arc::new(Mutex::new(Client::new(
+            self.default_max_sockets,
+            self.key.clone(),
+            session_token,
+        )));
         self.clients.insert(url, client.clone());
 
         let mut client = client.lock().await;
-        client.listen().await
+        let port = client.listen().await?;
+        Ok((port, hex::encode(session_token)))
     }
 
     /// clean up old unused clients
@@ -74,20 +106,24 @@ impl ClientManager {
 }
 
 pub struct Client {
-    pub available_sockets: Arc<Mutex<Vec<TcpStream>>>,
+    pub available_sockets: Arc<Mutex<Vec<TunnelStream>>>,
     pub port: Option<u16>,
     pub max_sockets: u8,
+    key: Arc<Keypair>,
+    session_token: [u8; SESSION_TOKEN_LEN],
     listen_task: Option<JoinHandle<()>>,
     /// last time a new connection was established
     last_connection_time: Instant,
 }
 
 impl Client {
-    pub fn new(max_sockets: u8) -> Self {
+    pub fn new(max_sockets: u8, key: Arc<Keypair>, session_token: [u8; SESSION_TOKEN_LEN]) -> Self {
         Client {
             available_sockets: Arc::new(Mutex::new(vec![])),
             port: None,
             max_sockets,
+            key,
+            session_token,
             listen_task: None,
             last_connection_time: std::time::Instant::now(),
         }
@@ -100,19 +136,25 @@ impl Client {
 
         let sockets = self.available_sockets.clone();
         let max_sockets = self.max_sockets;
+        let key = self.key.clone();
+        let session_token = self.session_token;
 
         let listen_task = tokio::spawn(async move {
-            // TODO check client is authenticated for the port
             loop {
                 match timeout(Duration::from_secs(20), listener.accept()).await {
                     Ok(Ok((socket, addr))) => {
                         log::info!("new client connection: {:?}", addr);
 
-                        let mut sockets = sockets.lock().await;
-                        let sockets_len = sockets.len();
+                        let sockets = sockets.clone();
+                        let key = key.clone();
 
-                        if sockets_len < max_sockets as usize {
-                            log::debug!("Add a new socket {}/{max_sockets}", sockets_len + 1,);
+                        // Handshake in its own task so a slow or hostile peer
+                        // can't stall the accept loop.
+                        tokio::spawn(async move {
+                            if sockets.lock().await.len() >= max_sockets as usize {
+                                log::warn!("Reached sockets max: {max_sockets}, dropping connection");
+                                return;
+                            }
 
                             let ka = TcpKeepalive::new()
                                 .with_time(TCP_KEEPALIVE_TIME)
@@ -124,10 +166,32 @@ impl Client {
                                 log::warn!("failed to enable TCP keepalive: {err}");
                             }
 
-                            sockets.push(socket)
-                        } else {
-                            log::warn!("Reached sockets max: {sockets_len}/{max_sockets}");
-                        }
+                            let stream = match timeout(
+                                HANDSHAKE_TIMEOUT,
+                                secure_accept(socket, &key, &session_token),
+                            )
+                            .await
+                            {
+                                Ok(Ok(stream)) => stream,
+                                Ok(Err(err)) => {
+                                    log::warn!("rejected tunnel connection from {addr:?}: {err:?}");
+                                    return;
+                                }
+                                Err(_) => {
+                                    log::warn!("tunnel handshake with {addr:?} timed out");
+                                    return;
+                                }
+                            };
+
+                            let mut sockets = sockets.lock().await;
+                            let sockets_len = sockets.len();
+                            if sockets_len < max_sockets as usize {
+                                log::debug!("Add a new socket {}/{max_sockets}", sockets_len + 1);
+                                sockets.push(stream);
+                            } else {
+                                log::warn!("Reached sockets max: {sockets_len}/{max_sockets}");
+                            }
+                        });
                     }
                     Ok(Err(e)) => log::info!("Couldn't get client: {:?}", e),
                     Err(_) => {
@@ -136,7 +200,7 @@ impl Client {
                         let sockets_len = sockets.len();
                         let mut connected_sockets = vec![];
                         while let Some(s) = sockets.pop() {
-                            if socket_is_writable(&s).await {
+                            if socket_is_writable(s.get_inner()).await {
                                 connected_sockets.push(s);
                             }
                         }
@@ -157,7 +221,7 @@ impl Client {
         Ok(port)
     }
 
-    pub async fn take(&mut self) -> Option<TcpStream> {
+    pub async fn take(&mut self) -> Option<TunnelStream> {
         self.last_connection_time = Instant::now();
         let mut sockets = self.available_sockets.lock().await;
 
@@ -169,7 +233,7 @@ impl Client {
                 self.max_sockets
             );
 
-            if socket_is_writable(&socket).await {
+            if socket_is_writable(socket.get_inner()).await {
                 return Some(socket);
             }
 
@@ -197,6 +261,41 @@ impl Drop for Client {
             task.abort();
         }
     }
+}
+
+/// Complete the Noise handshake as responder, then require the tunnel's
+/// session token as the first encrypted message. Only authenticated
+/// connections may join the pool — this is what stops an arbitrary peer that
+/// found the port from receiving proxied traffic. A one-byte ack is sent back
+/// so the client can distinguish "accepted" from "rejected" instead of
+/// discovering it later through a dead proxied request.
+async fn secure_accept(
+    socket: TcpStream,
+    key: &Keypair,
+    session_token: &[u8; SESSION_TOKEN_LEN],
+) -> Result<TunnelStream> {
+    let responder = Builder::new(NOISE_PARAMS.parse()?)
+        .local_private_key(&key.private)
+        .build_responder()?;
+    let mut stream = NoiseStream::handshake(socket, responder)
+        .await
+        .map_err(|err| anyhow!("noise handshake failed: {err:?}"))?;
+
+    let mut received = [0u8; SESSION_TOKEN_LEN];
+    stream.read_exact(&mut received).await?;
+    if !token_matches(&received, session_token) {
+        return Err(anyhow!("session token mismatch"));
+    }
+
+    stream.write_all(&[1]).await?;
+    stream.flush().await?;
+
+    Ok(stream)
+}
+
+fn token_matches(a: &[u8; SESSION_TOKEN_LEN], b: &[u8; SESSION_TOKEN_LEN]) -> bool {
+    // Constant-time comparison, no dependence on where the first mismatch is.
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 async fn socket_is_writable(socket: &TcpStream) -> bool {

@@ -9,6 +9,18 @@ Localtunnel exposes your localhost endpoint to the world, user cases are:
 - multiple devices access to single data store
 - peer to peer connection, workaround for NAT hole punching.
 
+## Encrypted tunnel
+
+Since v0.2.0 all tunnel connections between client and server are encrypted
+with the [Noise protocol](https://noiseprotocol.org/) (`NK` pattern,
+X25519 + ChaCha20-Poly1305), with fresh session keys per connection. The
+server hands its public key and a per-tunnel session token to the client in
+the registration response, and only connections that complete the handshake
+and present the token can join the tunnel pool.
+
+This is a breaking protocol change: v0.2.0 clients and servers do not
+interoperate with older releases — upgrade both sides.
+
 ## Client Usage
 
 Known issue: *the public proxy server is down, please setup your own server.*
@@ -40,6 +52,7 @@ let config = ClientConfig {
     shutdown_signal: notify_shutdown.clone(),
     max_conn: 10,
     credential: None,
+    reregister_after: None,
 };
 let result = open_tunnel(config).await?;
 
