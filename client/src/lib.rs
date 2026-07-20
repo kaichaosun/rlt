@@ -22,6 +22,17 @@ const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
 
+/// How long a pooled socket must have survived before the remote closing it counts as
+/// ordinary pool recycling rather than an endpoint failure. A socket closed within this
+/// window never had a chance to carry a request: the server was restarting, its listener
+/// was gone, or it refused the socket outright (`Reached sockets max` in
+/// `server/src/state.rs`). A socket the server held for longer and then closed is
+/// indistinguishable from a normal lifecycle event — a redeploy, the subdomain entry
+/// being replaced, an idle timeout on a load balancer in front of it — and must not
+/// force a re-registration. 5 s is short enough that a dead endpoint is detected within
+/// one reconnect cycle, and long enough that no healthy pool ever falls under it.
+const IDLE_CLOSE_MIN_LIFETIME: Duration = Duration::from_secs(5);
+
 /// Size of the buffer used to wait for the first byte of a request. One byte is
 /// enough because the read is a *detector* ("data arrived" vs "FIN arrived"), not
 /// a parser — the bytes are peeked, not consumed, and the splice reads them again.
@@ -69,6 +80,22 @@ enum ConnOutcome {
     /// The TCP connect to the endpoint itself failed. Produced by
     /// `tunnel_one_connection`, not by `proxy_through`.
     RemoteConnectFailed,
+}
+
+/// Which reconnect delay a finished connection task should apply. Phase 2 only decides
+/// *which* counter is at fault; the actual delays still come from the hardcoded sleeps
+/// and are replaced by real exponential backoff in phase 3. Keeping remote and local
+/// apart matters because they have opposite tuning: a returning local service should be
+/// picked up in milliseconds, an unreachable endpoint should be retried ever more slowly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackoffAction {
+    /// The connection did its job — reset any backoff and reconnect at once.
+    None,
+    /// The remote endpoint is at fault. Back off the remote-side counter.
+    Remote,
+    /// The remote endpoint is fine, the local application is not. Back off the
+    /// local-side counter; endpoint health is untouched.
+    Local,
 }
 
 /// Default for [`ClientConfig::reregister_after`]: how long the remote endpoint
@@ -240,20 +267,24 @@ async fn tunnel_supervisor(config: SupervisorConfig, initial_info: TunnelServerI
 /// Tracks remote-endpoint health for a single round and triggers re-registration
 /// once the endpoint has been *continuously* unreachable for `reregister_after`.
 ///
-/// Only *remote* TCP-connect outcomes are recorded here: a failure means the
-/// server's listener port may be gone (cleanup, restart, etc.). Local-connect or
-/// proxy errors (e.g. local server restarting) are deliberately not recorded,
-/// avoiding spurious re-registration loops.
+/// Health is recorded from the *outcome* of a connection, never from the mere fact that a
+/// TCP connect succeeded: an endpoint that accepts a socket and closes it a moment later
+/// is unusable, and counting that accept as a success would refresh the timestamp forever
+/// so the trigger could never fire. Evidence of health is therefore traffic actually
+/// served, or a pooled socket the remote kept for at least `IDLE_CLOSE_MIN_LIFETIME`
+/// before closing it. Local-connect or proxy errors (e.g. the local server restarting)
+/// are deliberately not recorded as failures — the remote is fine, only the developer's
+/// application is down — and drive their own backoff instead, avoiding spurious
+/// re-registration loops.
 ///
-/// `last_success_ms` is the millisecond offset (from `round_start`) of the last
-/// time the remote was known reachable, shared across all connections in the
-/// round. It is refreshed both when a connection is established *and* when an
-/// established connection ends — a live connection proves the remote was
-/// reachable for as long as it lasted, so downtime is measured from when it
-/// dropped, not from when it opened (which may be long ago for an idle tunnel).
-/// Initialized to 0, i.e. "healthy at round start", so a never-reachable endpoint
-/// still trips after `reregister_after`. Tracking time rather than a failure count
-/// decouples the trigger from how many connections happen to fail at once.
+/// `last_success_ms` is the millisecond offset (from `round_start`) of the last time the
+/// remote was known usable, shared across all connections in the round. It is refreshed
+/// when a connection ends after proving the remote was usable — a live connection proves
+/// reachability for as long as it lasted, so downtime is measured from when it dropped,
+/// not from when it opened (which may be long ago for an idle tunnel). Initialized to 0,
+/// i.e. "healthy at round start", so a never-usable endpoint still trips after
+/// `reregister_after`. Tracking time rather than a failure count decouples the trigger
+/// from how many connections happen to fail at once.
 #[derive(Clone)]
 struct RoundHealth {
     round_start: Instant,
@@ -288,6 +319,47 @@ impl RoundHealth {
             let _ = self.reregister_tx.try_send(());
         }
         Duration::from_millis(down_for_ms)
+    }
+
+    /// Fold a finished connection's outcome into endpoint health and report which
+    /// reconnect delay the caller should apply.
+    ///
+    /// Only the remote endpoint's own behaviour moves the health timestamp. A socket the
+    /// remote accepted and then closed before it could carry anything is a failure even
+    /// though the TCP connect succeeded; a socket it kept for a while and then closed is
+    /// ordinary recycling. A local outage is never charged to the endpoint.
+    fn record_outcome(&self, outcome: &ConnOutcome) -> BackoffAction {
+        match outcome {
+            ConnOutcome::Served { bytes } => {
+                log::debug!("Connection served {} bytes", bytes);
+                self.record_success();
+                BackoffAction::None
+            }
+            ConnOutcome::RemoteConnectFailed => {
+                let down_for = self.record_failure();
+                log::warn!("Remote endpoint unreachable (down for {:?})", down_for);
+                BackoffAction::Remote
+            }
+            ConnOutcome::RemoteClosedIdle { lifetime } if *lifetime < IDLE_CLOSE_MIN_LIFETIME => {
+                let down_for = self.record_failure();
+                log::warn!(
+                    "Remote closed an idle socket after {:?} (down for {:?})",
+                    lifetime,
+                    down_for
+                );
+                BackoffAction::Remote
+            }
+            ConnOutcome::RemoteClosedIdle { lifetime } => {
+                log::debug!("Remote recycled an idle socket after {:?}", lifetime);
+                self.record_success();
+                BackoffAction::None
+            }
+            ConnOutcome::LocalUnavailable => {
+                log::error!("Local service unavailable, remote endpoint left untouched");
+                self.record_success();
+                BackoffAction::Local
+            }
+        }
     }
 }
 
@@ -358,44 +430,40 @@ async fn tunnel_one_connection(
 ) {
     log::debug!("Connecting to remote: {}:{}", server_host, server_port);
     let outcome = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
-        Ok(stream) => {
-            health.record_success();
-            let proxy_result = proxy_through(stream, local_host, local_port).await;
-            // The remote stayed reachable for the whole life of this connection, which
-            // just ended. Refresh the timestamp so that if reconnects now start failing,
-            // downtime is measured from this moment rather than from when the connection
-            // was first opened — otherwise an idle tunnel that drops would report a huge
-            // downtime on the very first failure and re-register on a momentary blip.
-            health.record_success();
-            match proxy_result {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    log::error!("Proxy error: {:?}", err);
-                    sleep(Duration::from_secs(10)).await;
-                    return;
-                }
+        // A successful connect proves nothing on its own: the server may hand back a
+        // socket it is about to drop. Only the outcome of the connection moves health.
+        Ok(remote_stream) => match proxy_through(remote_stream, local_host, local_port).await {
+            Ok(outcome) => outcome,
+            // A genuine I/O error mid-splice still proves the remote was reachable, so it
+            // must not be charged to endpoint health; treat it as a local-side problem.
+            Err(err) => {
+                log::error!("Proxy error: {:?}", err);
+                ConnOutcome::LocalUnavailable
             }
-        }
+        },
         Err(err) => {
-            let down_for = health.record_failure();
-            log::error!("Remote connect failed (down for {:?}): {:?}", down_for, err);
+            log::error!("Remote connect failed: {:?}", err);
             ConnOutcome::RemoteConnectFailed
         }
     };
 
+    let action = health.record_outcome(&outcome);
+
+    // Accounting and pacing are deliberately decided separately. The delays below are
+    // unchanged from the previous phase: an endpoint that closes idle sockets must still
+    // be retried twice a second, because that is what refills the pool the moment it
+    // recovers. Waiting ten seconds here would pin every semaphore permit taken in
+    // `start_tunnel_connections` and leave the tunnel dead for the whole recovery window.
+    // `action` already separates a remote fault from a local one; the next phase turns
+    // that distinction into two independent exponential backoff counters and retires
+    // both constants below.
     match outcome {
-        ConnOutcome::Served { bytes } => {
-            log::debug!("Tunnel connection served {} bytes", bytes);
+        ConnOutcome::Served { .. } => {}
+        ConnOutcome::RemoteClosedIdle { .. } => sleep(RECONNECT_AFTER_IDLE_CLOSE).await,
+        ConnOutcome::LocalUnavailable | ConnOutcome::RemoteConnectFailed => {
+            log::debug!("Reconnect delayed after {:?}", action);
+            sleep(Duration::from_secs(10)).await
         }
-        ConnOutcome::RemoteClosedIdle { lifetime } => {
-            log::debug!("Remote closed an idle pooled socket after {:?}", lifetime);
-            sleep(RECONNECT_AFTER_IDLE_CLOSE).await;
-        }
-        // The local service is down; without a pause the whole pool would turn into a
-        // hot loop. This is the same 10 s that a local-connect error used to sleep for
-        // when it surfaced as a proxy error. Phase 3 replaces it with a local backoff.
-        ConnOutcome::LocalUnavailable => sleep(Duration::from_secs(10)).await,
-        ConnOutcome::RemoteConnectFailed => sleep(Duration::from_secs(10)).await,
     }
 }
 
@@ -612,5 +680,160 @@ mod tests {
         let down = health.record_failure();
         assert!(down >= Duration::from_millis(200), "downtime was {down:?}");
         assert!(rx.try_recv().is_ok(), "should request re-registration");
+    }
+
+    // A connection that actually carried traffic is the strongest possible proof that
+    // the endpoint is alive, so it clears any accumulated downtime and asks for no delay.
+    #[tokio::test]
+    async fn served_connection_marks_endpoint_healthy() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(200), tx);
+
+        sleep(Duration::from_millis(250)).await; // past the window
+        let action = health.record_outcome(&ConnOutcome::Served { bytes: 42 });
+
+        assert_eq!(
+            action,
+            BackoffAction::None,
+            "served traffic needs no backoff"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a served connection must not re-register"
+        );
+        let down = health.record_failure();
+        assert!(down < Duration::from_millis(200), "downtime was {down:?}");
+    }
+
+    // A refused TCP connect is the classic "the listener is gone" signal and is the one
+    // case that already worked before phase 2; it must keep working.
+    #[tokio::test]
+    async fn remote_connect_failure_counts_against_the_endpoint() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(200), tx);
+
+        sleep(Duration::from_millis(250)).await;
+        let action = health.record_outcome(&ConnOutcome::RemoteConnectFailed);
+
+        assert_eq!(
+            action,
+            BackoffAction::Remote,
+            "a dead endpoint needs remote backoff"
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "sustained connect failures must re-register"
+        );
+    }
+
+    // The defect this phase exists for: the server accepts the socket and drops it right
+    // away, so `TcpStream::connect` succeeds and nothing used to be recorded. A socket
+    // closed this fast never had a chance to serve anything — it is an endpoint failure.
+    #[tokio::test]
+    async fn instant_remote_close_counts_as_endpoint_failure() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(200), tx);
+
+        sleep(Duration::from_millis(250)).await;
+        let action = health.record_outcome(&ConnOutcome::RemoteClosedIdle {
+            lifetime: Duration::from_millis(1),
+        });
+
+        assert_eq!(
+            action,
+            BackoffAction::Remote,
+            "an instant close is a failure"
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "instant closes must arm re-registration"
+        );
+    }
+
+    // The opposite end of the same variant: a socket the server held for a while and then
+    // closed is ordinary recycling (redeploy, subdomain entry replaced, LB idle timeout).
+    // Charging it to the endpoint would re-register a perfectly healthy tunnel. The
+    // threshold is inclusive, so a lifetime exactly at the boundary counts as healthy.
+    #[tokio::test]
+    async fn long_lived_remote_close_is_normal_pool_recycling() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(200), tx);
+
+        sleep(Duration::from_millis(250)).await;
+        let action = health.record_outcome(&ConnOutcome::RemoteClosedIdle {
+            lifetime: IDLE_CLOSE_MIN_LIFETIME,
+        });
+
+        assert_eq!(
+            action,
+            BackoffAction::None,
+            "pool recycling needs no remote backoff"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "pool recycling must not re-register"
+        );
+    }
+
+    // A local outage says nothing about the remote endpoint; re-registering would move
+    // the listener for no reason and loop for as long as the developer's service is down.
+    // Repeating it well past the window must still leave the endpoint marked healthy.
+    #[tokio::test]
+    async fn local_outage_never_reregisters() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(200), tx);
+
+        for _ in 0..3 {
+            sleep(Duration::from_millis(100)).await;
+            let action = health.record_outcome(&ConnOutcome::LocalUnavailable);
+            assert_eq!(
+                action,
+                BackoffAction::Local,
+                "local outages back off locally"
+            );
+        }
+
+        assert!(
+            rx.try_recv().is_err(),
+            "a local outage must never trigger re-registration, however long it lasts",
+        );
+    }
+
+    // Guards the load-bearing decision of plan 02-02: a successful TCP connect is no
+    // longer evidence of health. Nothing inside an instant-close loop may refresh
+    // `last_success_ms`, otherwise downtime is wiped on every iteration and the trigger
+    // can never fire — which is precisely why the tunnel stayed dead in issue #8. Unlike
+    // the tests above, the window here cannot be cleared by a single step, so the
+    // accumulation itself is exercised rather than assumed.
+    #[tokio::test]
+    async fn repeated_instant_closes_accumulate_downtime() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = RoundHealth::new(Duration::from_millis(500), tx);
+
+        for _ in 0..2 {
+            sleep(Duration::from_millis(100)).await;
+            let action = health.record_outcome(&ConnOutcome::RemoteClosedIdle {
+                lifetime: Duration::from_millis(1),
+            });
+            assert_eq!(
+                action,
+                BackoffAction::Remote,
+                "instant closes back off remotely"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "downtime is still inside the window"
+            );
+        }
+
+        sleep(Duration::from_millis(400)).await;
+        health.record_outcome(&ConnOutcome::RemoteClosedIdle {
+            lifetime: Duration::from_millis(1),
+        });
+
+        assert!(
+            rx.try_recv().is_ok(),
+            "instant closes must accumulate downtime, not reset it on every attempt",
+        );
     }
 }
