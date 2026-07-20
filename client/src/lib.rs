@@ -7,11 +7,11 @@ use std::time::Instant;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
-use tokio::io;
+use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
 pub use tokio::sync::broadcast;
 use tokio::sync::{mpsc, Semaphore};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 pub const PROXY_SERVER: &str = "https://your-domain.com";
 pub const LOCAL_HOST: &str = "127.0.0.1";
@@ -21,6 +21,55 @@ const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
+
+/// Size of the buffer used to wait for the first byte of a request. One byte is
+/// enough because the read is a *detector* ("data arrived" vs "FIN arrived"), not
+/// a parser — the bytes are peeked, not consumed, and the splice reads them again.
+/// The buffer must not be empty: peeking into an empty slice returns `Ok(0)` and
+/// would look like a false EOF.
+const FIRST_BYTE_PROBE: usize = 1;
+
+/// Upper bound on "let the other direction drain its tail" after one direction has
+/// already reached EOF. It is only ever armed *after* an EOF, so a connection with
+/// both halves alive (a websocket, an SSE stream) is never affected by it: neither
+/// copy completes, so the grace timeout is not even created.
+const HALF_CLOSE_GRACE: Duration = Duration::from_secs(10);
+
+/// Pause before re-offering a socket after the remote closed an idle pooled one.
+/// This is a safety belt, not decoration: before this fix such a task hung forever,
+/// now it finishes in milliseconds, and without a pause `max_conn` tasks would spin
+/// in a hot reconnect loop while the endpoint keeps refusing sockets. 500 ms caps
+/// that at two attempts per second per task while still fitting inside the 5 s
+/// recovery window the regression test asserts. Phase 3 replaces this constant with
+/// exponential backoff plus deterministic jitter.
+const RECONNECT_AFTER_IDLE_CLOSE: Duration = Duration::from_millis(500);
+
+/// How a single tunnel connection ended.
+///
+/// Modelled as an explicit outcome rather than `Result<()>` because the interesting
+/// cases are not errors: a remote that closes a pooled socket it no longer needs, and
+/// a local service that is momentarily down, are both normal states of a tunnel. Only
+/// genuine I/O failures stay in `Err`. Phase 2 maps these variants onto `RoundHealth`,
+/// which is why the distinction between a remote-side and a local-side failure has to
+/// survive all the way up to the caller.
+#[derive(Debug)]
+enum ConnOutcome {
+    /// Bytes flowed in at least one direction and the connection finished cleanly.
+    /// `bytes` is the total moved in both directions.
+    Served { bytes: u64 },
+    /// The remote closed (FIN / RST / keepalive timeout) before sending a single
+    /// request byte. `lifetime` is measured from the moment the socket entered
+    /// `proxy_through` until the read returned 0; phase 2 compares it against
+    /// `IDLE_CLOSE_MIN_LIFETIME` to tell "server went away" from routine pool churn.
+    RemoteClosedIdle { lifetime: Duration },
+    /// A request arrived but the local service refused the connection. Note this is a
+    /// *local* failure — the remote endpoint is healthy, so it must never count
+    /// against endpoint health (see the docs on [`RoundHealth`]).
+    LocalUnavailable,
+    /// The TCP connect to the endpoint itself failed. Produced by
+    /// `tunnel_one_connection`, not by `proxy_through`.
+    RemoteConnectFailed,
+}
 
 /// Default for [`ClientConfig::reregister_after`]: how long the remote endpoint
 /// must be *continuously* unreachable before we re-register. Time-based rather
@@ -308,29 +357,124 @@ async fn tunnel_one_connection(
     health: &RoundHealth,
 ) {
     log::debug!("Connecting to remote: {}:{}", server_host, server_port);
-    let remote_stream = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
+    let outcome = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
         Ok(stream) => {
             health.record_success();
-            stream
+            let proxy_result = proxy_through(stream, local_host, local_port).await;
+            // The remote stayed reachable for the whole life of this connection, which
+            // just ended. Refresh the timestamp so that if reconnects now start failing,
+            // downtime is measured from this moment rather than from when the connection
+            // was first opened — otherwise an idle tunnel that drops would report a huge
+            // downtime on the very first failure and re-register on a momentary blip.
+            health.record_success();
+            match proxy_result {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    log::error!("Proxy error: {:?}", err);
+                    sleep(Duration::from_secs(10)).await;
+                    return;
+                }
+            }
         }
         Err(err) => {
             let down_for = health.record_failure();
             log::error!("Remote connect failed (down for {:?}): {:?}", down_for, err);
-            sleep(Duration::from_secs(10)).await;
-            return;
+            ConnOutcome::RemoteConnectFailed
         }
     };
 
-    let proxy_result = proxy_through(remote_stream, local_host, local_port).await;
-    // The remote stayed reachable for the whole life of this connection, which
-    // just ended. Refresh the timestamp so that if reconnects now start failing,
-    // downtime is measured from this moment rather than from when the connection
-    // was first opened — otherwise an idle tunnel that drops would report a huge
-    // downtime on the very first failure and re-register on a momentary blip.
-    health.record_success();
-    if let Err(err) = proxy_result {
-        log::error!("Proxy error: {:?}", err);
-        sleep(Duration::from_secs(10)).await;
+    match outcome {
+        ConnOutcome::Served { bytes } => {
+            log::debug!("Tunnel connection served {} bytes", bytes);
+        }
+        ConnOutcome::RemoteClosedIdle { lifetime } => {
+            log::debug!("Remote closed an idle pooled socket after {:?}", lifetime);
+            sleep(RECONNECT_AFTER_IDLE_CLOSE).await;
+        }
+        // The local service is down; without a pause the whole pool would turn into a
+        // hot loop. This is the same 10 s that a local-connect error used to sleep for
+        // when it surfaced as a proxy error. Phase 3 replaces it with a local backoff.
+        ConnOutcome::LocalUnavailable => sleep(Duration::from_secs(10)).await,
+        ConnOutcome::RemoteConnectFailed => sleep(Duration::from_secs(10)).await,
+    }
+}
+
+fn set_remote_keepalive(stream: &TcpStream) -> Result<()> {
+    let ka = TcpKeepalive::new()
+        .with_time(TCP_KEEPALIVE_TIME)
+        .with_interval(TCP_KEEPALIVE_INTERVAL);
+    #[cfg(not(target_os = "windows"))]
+    let ka = ka.with_retries(TCP_KEEPALIVE_RETRIES);
+    let sf = SockRef::from(stream);
+    sf.set_tcp_keepalive(&ka)?;
+    Ok(())
+}
+
+/// Which half finished first, reported out of `select!` instead of acted on inside it.
+enum FirstDone {
+    RemoteToLocal(u64),
+    LocalToRemote(u64),
+    Failed(std::io::Error),
+}
+
+/// Splice the two streams with two half-copies, closing each write half explicitly
+/// once its source has reached EOF. Returns the total number of bytes moved.
+async fn splice_halves(remote_stream: &mut TcpStream, local_stream: &mut TcpStream) -> u64 {
+    // Borrowing `split()` rather than `into_split()`: ownership of both `TcpStream`s
+    // stays with the caller, there is no per-connection `Arc` allocation, and no
+    // implicit FIN from `Drop for OwnedWriteHalf`.
+    let (mut remote_reader, mut remote_writer) = remote_stream.split();
+    let (mut local_reader, mut local_writer) = local_stream.split();
+
+    // As long as both directions are alive neither `io::copy` ever completes, so
+    // `select!` does not fire and the grace timeout below is never even created — a
+    // silent-but-live websocket is not torn down by an idle period of any length.
+    // The grace window only starts counting after one side has already sent EOF.
+    let first = tokio::select! {
+        result = io::copy(&mut remote_reader, &mut local_writer) => match result {
+            Ok(bytes) => FirstDone::RemoteToLocal(bytes),
+            Err(err) => FirstDone::Failed(err),
+        },
+        result = io::copy(&mut local_reader, &mut remote_writer) => match result {
+            Ok(bytes) => FirstDone::LocalToRemote(bytes),
+            Err(err) => FirstDone::Failed(err),
+        },
+    };
+
+    // Only here are both futures dropped and the borrows on the halves released.
+    // Calling `shutdown()` inside a `select!` arm would not compile (E0499): the
+    // losing future still holds a `&mut` on its halves until the macro exits.
+    // `into_split()` does not change that, so switching split styles does not help.
+    // `io::copy` flushes on EOF but never shuts down, hence the explicit calls.
+    match first {
+        FirstDone::RemoteToLocal(bytes) => {
+            let _ = local_writer.shutdown().await;
+            let tail = timeout(
+                HALF_CLOSE_GRACE,
+                io::copy(&mut local_reader, &mut remote_writer),
+            )
+            .await;
+            let _ = remote_writer.shutdown().await;
+            bytes + tail.ok().and_then(|result| result.ok()).unwrap_or(0)
+        }
+        FirstDone::LocalToRemote(bytes) => {
+            let _ = remote_writer.shutdown().await;
+            let tail = timeout(
+                HALF_CLOSE_GRACE,
+                io::copy(&mut remote_reader, &mut local_writer),
+            )
+            .await;
+            let _ = local_writer.shutdown().await;
+            bytes + tail.ok().and_then(|result| result.ok()).unwrap_or(0)
+        }
+        FirstDone::Failed(err) => {
+            // The remote connection itself was established, so this is not a
+            // `RemoteConnectFailed`; it is just a connection that ended badly.
+            log::debug!("Proxy copy failed: {:?}", err);
+            let _ = local_writer.shutdown().await;
+            let _ = remote_writer.shutdown().await;
+            0
+        }
     }
 }
 
@@ -338,20 +482,63 @@ async fn proxy_through(
     mut remote_stream: TcpStream,
     local_host: &str,
     local_port: u16,
-) -> Result<()> {
+) -> Result<ConnOutcome> {
+    let opened_at = Instant::now();
+
+    // Keepalive goes on first, before anything else. This socket is about to sit in
+    // the server's pool with no local peer attached, waiting for a request that may
+    // never come; without keepalive a silently dropped NAT/firewall state would keep
+    // it hanging forever. It also covers the case where the local connect below
+    // disappears into a black hole (a SYN with no answer takes ~2 minutes on Linux).
+    set_remote_keepalive(&remote_stream)?;
+
+    // Wait for the first request byte with *no* connection to the local service. This
+    // is the fix for the stall: previously a FIN on an idle pooled socket never ended
+    // the task, because the bidirectional copy also waited for the live local
+    // keep-alive connection to reach EOF, so the semaphore permit leaked forever.
+    //
+    // No timeout here on purpose: a pooled socket is allowed to wait arbitrarily long,
+    // and a dead peer is detected by TCP keepalive (worst case 30 + 5x10 = 80 s).
+    // Adding a timeout here would break the server's connection pool.
+    let mut probe = [0u8; FIRST_BYTE_PROBE];
+    match remote_stream.peek(&mut probe).await {
+        Ok(0) => {
+            return Ok(ConnOutcome::RemoteClosedIdle {
+                lifetime: opened_at.elapsed(),
+            })
+        }
+        Err(err) => {
+            // RST, ConnectionReset or a keepalive TimedOut all mean the same thing to
+            // us: release the permit and reconnect. No need to split them apart.
+            log::debug!("Remote closed an idle socket: {:?}", err.kind());
+            return Ok(ConnOutcome::RemoteClosedIdle {
+                lifetime: opened_at.elapsed(),
+            });
+        }
+        Ok(_) => {}
+    }
+
     log::debug!("Connecting to local: {}:{}", local_host, local_port);
-    let mut local_stream = TcpStream::connect(format!("{local_host}:{local_port}")).await?;
+    let mut local_stream = match TcpStream::connect(format!("{local_host}:{local_port}")).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            log::error!("Local connect failed: {:?}", err);
+            // Answer with a real HTTP error so the caller sees a 502 instead of an
+            // empty read. Content-Length must match the 21-byte body exactly, or the
+            // far end blocks waiting for the rest. Write errors are swallowed on
+            // purpose: the remote may already be gone, which is not worth logging.
+            let _ = remote_stream
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: 21\r\nConnection: close\r\n\r\nlocal service is down")
+                .await;
+            let _ = remote_stream.shutdown().await;
+            return Ok(ConnOutcome::LocalUnavailable);
+        }
+    };
 
-    let ka = TcpKeepalive::new()
-        .with_time(TCP_KEEPALIVE_TIME)
-        .with_interval(TCP_KEEPALIVE_INTERVAL);
-    #[cfg(not(target_os = "windows"))]
-    let ka = ka.with_retries(TCP_KEEPALIVE_RETRIES);
-    let sf = SockRef::from(&remote_stream);
-    sf.set_tcp_keepalive(&ka)?;
-
-    io::copy_bidirectional(&mut remote_stream, &mut local_stream).await?;
-    Ok(())
+    // Nothing to replay: `peek` did not consume the probed bytes, they are still in
+    // the kernel receive buffer and the splice below picks them up on its first read.
+    let bytes = splice_halves(&mut remote_stream, &mut local_stream).await;
+    Ok(ConnOutcome::Served { bytes })
 }
 
 async fn get_tunnel_endpoint(

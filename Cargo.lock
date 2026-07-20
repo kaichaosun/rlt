@@ -1051,6 +1051,7 @@ name = "localtunnel-client"
 version = "0.1.7"
 dependencies = [
  "anyhow",
+ "localtunnel-server",
  "log",
  "reqwest",
  "serde",

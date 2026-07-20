@@ -19,3 +19,6 @@ socket2 = { workspace = true }
 [features]
 default = ["reqwest/default"]
 rustls-tls = ["reqwest/rustls-tls"]
+
+[dev-dependencies]
+localtunnel-server = { path = "../server" }
