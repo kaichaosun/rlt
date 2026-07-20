@@ -124,6 +124,8 @@ async fn reregisters_when_remote_closes_every_socket() {
         max_conn: 10,
         credential: None,
         reregister_after: Some(Duration::ZERO),
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 
@@ -191,6 +193,8 @@ async fn local_outage_does_not_trigger_reregistration() {
         max_conn: 10,
         credential: None,
         reregister_after: Some(Duration::from_millis(200)),
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 

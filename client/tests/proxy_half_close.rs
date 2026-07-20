@@ -103,6 +103,8 @@ async fn local_unavailable_returns_502() {
         max_conn: 1,
         credential: None,
         reregister_after: None,
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 
@@ -169,6 +171,8 @@ async fn live_bidirectional_connection_survives_idle_period() {
         max_conn: 1,
         credential: None,
         reregister_after: None,
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 

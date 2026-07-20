@@ -80,6 +80,8 @@ async fn reregistration_on_remote_failure() {
         max_conn: 10,
         credential: None,
         reregister_after: Some(Duration::ZERO),
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 

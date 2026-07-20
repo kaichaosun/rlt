@@ -116,6 +116,8 @@ async fn pool_recovers_after_remote_closes_every_socket() {
         max_conn: 10,
         credential: None,
         reregister_after: None,
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 
@@ -166,6 +168,8 @@ async fn no_local_connection_before_first_byte() {
         max_conn: 10,
         credential: None,
         reregister_after: None,
+        reconnect_base_delay: None,
+        reconnect_max_delay: None,
     };
     open_tunnel(config).await.unwrap();
 

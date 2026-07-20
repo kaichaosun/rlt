@@ -22,6 +22,18 @@ const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
 
+/// Half-width of the reconnect jitter, in percent: a delay lands in [80 %, 120 %] of the
+/// exponential value, so a pool of connections that failed together does not retry in lockstep.
+const RECONNECT_JITTER_PERCENT: u64 = 20;
+/// Cap on the doubling exponent; `1u32 << 32` would overflow, and 2^31 already exceeds any cap.
+const BACKOFF_MAX_SHIFT: u32 = 31;
+/// Fibonacci-hashing constant: spreads adjacent task indices into far-apart PRNG states.
+const BACKOFF_SEED_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
+/// xorshift64* output multiplier (Marsaglia); scrambles the low bits we take a modulo of.
+const BACKOFF_SCRAMBLE: u64 = 0x2545_F491_4F6C_DD1D;
+/// Keeps a task's local-failure sequence from coinciding with its remote-failure sequence.
+const LOCAL_BACKOFF_SEED_XOR: u64 = 0xA5A5_A5A5_A5A5_A5A5;
+
 /// How long a pooled socket must have survived before the remote closing it counts as
 /// ordinary pool recycling rather than an endpoint failure. A socket closed within this
 /// window never had a chance to carry a request: the server was restarting, its listener
@@ -45,15 +57,6 @@ const FIRST_BYTE_PROBE: usize = 1;
 /// both halves alive (a websocket, an SSE stream) is never affected by it: neither
 /// copy completes, so the grace timeout is not even created.
 const HALF_CLOSE_GRACE: Duration = Duration::from_secs(10);
-
-/// Pause before re-offering a socket after the remote closed an idle pooled one.
-/// This is a safety belt, not decoration: before this fix such a task hung forever,
-/// now it finishes in milliseconds, and without a pause `max_conn` tasks would spin
-/// in a hot reconnect loop while the endpoint keeps refusing sockets. 500 ms caps
-/// that at two attempts per second per task while still fitting inside the 5 s
-/// recovery window the regression test asserts. Phase 3 replaces this constant with
-/// exponential backoff plus deterministic jitter.
-const RECONNECT_AFTER_IDLE_CLOSE: Duration = Duration::from_millis(500);
 
 /// How a single tunnel connection ended.
 ///
@@ -82,11 +85,12 @@ enum ConnOutcome {
     RemoteConnectFailed,
 }
 
-/// Which reconnect delay a finished connection task should apply. Phase 2 only decides
-/// *which* counter is at fault; the actual delays still come from the hardcoded sleeps
-/// and are replaced by real exponential backoff in phase 3. Keeping remote and local
-/// apart matters because they have opposite tuning: a returning local service should be
-/// picked up in milliseconds, an unreachable endpoint should be retried ever more slowly.
+/// Which reconnect delay a finished connection task should apply. Deciding *which*
+/// counter is at fault is kept apart from deciding *how long* to wait: the connection
+/// task owns the two [`Backoff`] counters and turns this answer into a pause. Keeping
+/// remote and local apart matters because they have opposite tuning: a returning local
+/// service should be picked up in milliseconds, an unreachable endpoint should be
+/// retried ever more slowly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackoffAction {
     /// The connection did its job — reset any backoff and reconnect at once.
@@ -105,6 +109,18 @@ enum BackoffAction {
 /// momentary network hiccup) that keepalive + reconnect can ride out on its own
 /// won't force a costly re-registration.
 pub const DEFAULT_REREGISTER_AFTER: Duration = Duration::from_secs(30);
+
+/// Default for [`ClientConfig::reconnect_base_delay`]: the pause before the first
+/// reconnect attempt after a failed connection. Small on purpose — a local service that
+/// was restarting is picked up in about half a second instead of the fixed ten seconds
+/// this replaces — while the exponential growth keeps a long outage cheap.
+pub const DEFAULT_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(500);
+
+/// Default for [`ClientConfig::reconnect_max_delay`]: the ceiling the reconnect pause
+/// doubles up to. Thirty seconds keeps a service that has been down for an hour at two
+/// polls a minute, and stays below the server's own socket bookkeeping so a recovered
+/// endpoint is still noticed promptly.
+pub const DEFAULT_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyResponse {
@@ -134,6 +150,12 @@ pub struct ClientConfig {
     /// How long the remote endpoint must be continuously unreachable before the
     /// tunnel re-registers. `None` uses [`DEFAULT_REREGISTER_AFTER`].
     pub reregister_after: Option<Duration>,
+    /// Pause before the first reconnect attempt of a connection task; it doubles on every
+    /// consecutive failure. `None` uses [`DEFAULT_RECONNECT_BASE_DELAY`].
+    pub reconnect_base_delay: Option<Duration>,
+    /// Ceiling for the reconnect pause, jitter included. `None` uses
+    /// [`DEFAULT_RECONNECT_MAX_DELAY`].
+    pub reconnect_max_delay: Option<Duration>,
 }
 
 /// Open tunnels directly between server and localhost.
@@ -151,6 +173,8 @@ pub async fn open_tunnel(config: ClientConfig) -> Result<String> {
         max_conn,
         credential,
         reregister_after,
+        reconnect_base_delay,
+        reconnect_max_delay,
     } = config;
     let tunnel_info =
         get_tunnel_endpoint(server.clone(), subdomain.clone(), credential.clone()).await?;
@@ -165,10 +189,78 @@ pub async fn open_tunnel(config: ClientConfig) -> Result<String> {
         shutdown_signal,
         max_conn,
         reregister_after: reregister_after.unwrap_or(DEFAULT_REREGISTER_AFTER),
+        backoff: BackoffConfig {
+            base: reconnect_base_delay.unwrap_or(DEFAULT_RECONNECT_BASE_DELAY),
+            cap: reconnect_max_delay.unwrap_or(DEFAULT_RECONNECT_MAX_DELAY),
+        },
     };
     tokio::spawn(tunnel_supervisor(supervisor_config, tunnel_info));
 
     Ok(url)
+}
+
+/// Resolved reconnect timing, shared by every connection task of a round. Each task keeps
+/// its own attempt counters; only these bounds are common.
+#[derive(Clone, Copy, Debug)]
+struct BackoffConfig {
+    base: Duration,
+    cap: Duration,
+}
+
+/// Deterministic exponential backoff with +/-20 % jitter and no external RNG.
+///
+/// `seed` is the index of the connection task in the round: together with the attempt
+/// counter it yields a sequence that is reproducible (so tests are not flaky) yet
+/// decorrelated between tasks, which is the whole point of jitter — otherwise every
+/// connection in the pool would retry in the same instant.
+#[derive(Debug)]
+struct Backoff {
+    base: Duration,
+    cap: Duration,
+    attempt: u32,
+    rng: u64,
+}
+
+impl Backoff {
+    fn new(config: BackoffConfig, seed: u64) -> Self {
+        Self {
+            base: config.base,
+            cap: config.cap,
+            attempt: 0,
+            // `| 1` guarantees a non-zero state: xorshift is stuck forever at zero.
+            rng: seed.wrapping_mul(BACKOFF_SEED_MIX) | 1,
+        }
+    }
+
+    /// Back to the base delay after the endpoint proved healthy.
+    fn reset(&mut self) {
+        self.attempt = 0;
+    }
+
+    /// Next pause: exponential with a ceiling, then deterministic jitter. The ceiling is
+    /// applied a second time after jitter so the configured maximum is a hard maximum.
+    fn next_delay(&mut self) -> Duration {
+        let factor = 1u32
+            .checked_shl(self.attempt.min(BACKOFF_MAX_SHIFT))
+            .unwrap_or(u32::MAX);
+        let exponential = self.base.saturating_mul(factor).min(self.cap);
+        self.attempt = self.attempt.saturating_add(1);
+
+        let spread = 2 * RECONNECT_JITTER_PERCENT + 1;
+        let percent = (100 - RECONNECT_JITTER_PERCENT) + (self.next_u64() % spread);
+        let millis = (exponential.as_millis() as u64).saturating_mul(percent) / 100;
+        Duration::from_millis(millis).min(self.cap)
+    }
+
+    /// xorshift64* — deterministic, never leaves the zero state, no dependency.
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.rng;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng = x;
+        x.wrapping_mul(BACKOFF_SCRAMBLE)
+    }
 }
 
 struct SupervisorConfig {
@@ -180,6 +272,7 @@ struct SupervisorConfig {
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
     reregister_after: Duration,
+    backoff: BackoffConfig,
 }
 
 // Runs the register → connect → detect-failures → re-register cycle.
@@ -210,6 +303,7 @@ async fn tunnel_supervisor(config: SupervisorConfig, initial_info: TunnelServerI
             round_stop_tx.clone(),
             config.max_conn,
             health,
+            config.backoff,
         );
 
         // Block until either the connections ask for re-registration or we
@@ -370,6 +464,7 @@ fn start_tunnel_connections(
     shutdown_signal: broadcast::Sender<()>,
     max_conn: u8,
     health: RoundHealth,
+    backoff_config: BackoffConfig,
 ) {
     let server_host = server.host.clone();
     let server_port = server.port;
@@ -382,6 +477,12 @@ fn start_tunnel_connections(
     let mut shutdown_receiver = shutdown_signal.subscribe();
 
     tokio::spawn(async move {
+        // Monotonic index of every connection task spawned in this round. It seeds the
+        // deterministic backoff jitter, so tasks that failed in the same instant do not
+        // retry in the same instant. There is no other source of per-task entropy: the
+        // client deliberately depends on no RNG crate.
+        let mut spawn_index: u64 = 0;
+
         loop {
             tokio::select! {
                 res = limit_connection.clone().acquire_owned() => {
@@ -396,14 +497,43 @@ fn start_tunnel_connections(
                     let local_host = local_host.clone();
                     let health = health.clone();
                     let mut shutdown_receiver = shutdown_signal.subscribe();
+                    let task_index = spawn_index;
+                    spawn_index = spawn_index.wrapping_add(1);
 
                     tokio::spawn(async move {
+                        let mut remote_backoff = Backoff::new(backoff_config, task_index);
+                        let mut local_backoff =
+                            Backoff::new(backoff_config, task_index ^ LOCAL_BACKOFF_SEED_XOR);
+
                         tokio::select! {
-                            _ = tunnel_one_connection(
-                                &server_host, server_port,
-                                &local_host, local_port,
-                                &health,
-                            ) => {}
+                            _ = async {
+                                // Retrying inside the task is what makes the delay able to grow:
+                                // the backoff state has to outlive a single attempt, otherwise a
+                                // service that has been down for an hour would still be polled at
+                                // the base rate. The pause is taken while holding the permit, so it
+                                // throttles the whole pool exactly like the fixed sleep it replaces.
+                                loop {
+                                    let delay = match tunnel_one_connection(
+                                        &server_host, server_port,
+                                        &local_host, local_port,
+                                        &health,
+                                    ).await {
+                                        // The endpoint carried traffic: hand the permit back so a
+                                        // fresh task takes this slot with a clean slate.
+                                        BackoffAction::None => break,
+                                        BackoffAction::Remote => remote_backoff.next_delay(),
+                                        // The remote handed us a request, so it is healthy; only the
+                                        // developer's application is down. Clear the remote counter
+                                        // and slow down the local one instead.
+                                        BackoffAction::Local => {
+                                            remote_backoff.reset();
+                                            local_backoff.next_delay()
+                                        }
+                                    };
+                                    log::debug!("Task {} reconnecting in {:?}", task_index, delay);
+                                    sleep(delay).await;
+                                }
+                            } => {}
                             _ = shutdown_receiver.recv() => {
                                 log::info!("Shutting down connection");
                             }
@@ -427,44 +557,29 @@ async fn tunnel_one_connection(
     local_host: &str,
     local_port: u16,
     health: &RoundHealth,
-) {
+) -> BackoffAction {
     log::debug!("Connecting to remote: {}:{}", server_host, server_port);
-    let outcome = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
-        // A successful connect proves nothing on its own: the server may hand back a
-        // socket it is about to drop. Only the outcome of the connection moves health.
-        Ok(remote_stream) => match proxy_through(remote_stream, local_host, local_port).await {
-            Ok(outcome) => outcome,
-            // A genuine I/O error mid-splice still proves the remote was reachable, so it
-            // must not be charged to endpoint health; treat it as a local-side problem.
-            Err(err) => {
-                log::error!("Proxy error: {:?}", err);
-                ConnOutcome::LocalUnavailable
-            }
-        },
+    // A successful connect proves nothing on its own: the server may hand back a socket it
+    // is about to drop. Only the outcome of the connection moves health. Pacing is decided
+    // by the caller, which owns the per-task backoff state — this function never sleeps.
+    let remote_stream = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
+        Ok(stream) => stream,
         Err(err) => {
             log::error!("Remote connect failed: {:?}", err);
-            ConnOutcome::RemoteConnectFailed
+            return health.record_outcome(&ConnOutcome::RemoteConnectFailed);
         }
     };
 
-    let action = health.record_outcome(&outcome);
-
-    // Accounting and pacing are deliberately decided separately. The delays below are
-    // unchanged from the previous phase: an endpoint that closes idle sockets must still
-    // be retried twice a second, because that is what refills the pool the moment it
-    // recovers. Waiting ten seconds here would pin every semaphore permit taken in
-    // `start_tunnel_connections` and leave the tunnel dead for the whole recovery window.
-    // `action` already separates a remote fault from a local one; the next phase turns
-    // that distinction into two independent exponential backoff counters and retires
-    // both constants below.
-    match outcome {
-        ConnOutcome::Served { .. } => {}
-        ConnOutcome::RemoteClosedIdle { .. } => sleep(RECONNECT_AFTER_IDLE_CLOSE).await,
-        ConnOutcome::LocalUnavailable | ConnOutcome::RemoteConnectFailed => {
-            log::debug!("Reconnect delayed after {:?}", action);
-            sleep(Duration::from_secs(10)).await
+    let outcome = match proxy_through(remote_stream, local_host, local_port).await {
+        Ok(outcome) => outcome,
+        // A genuine I/O error mid-splice still proves the remote was reachable, so it must
+        // not be charged to endpoint health; treat it as a local-side problem.
+        Err(err) => {
+            log::error!("Proxy error: {:?}", err);
+            ConnOutcome::LocalUnavailable
         }
-    }
+    };
+    health.record_outcome(&outcome)
 }
 
 fn set_remote_keepalive(stream: &TcpStream) -> Result<()> {
@@ -645,6 +760,116 @@ async fn get_tunnel_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_backoff_config() -> BackoffConfig {
+        BackoffConfig {
+            base: Duration::from_millis(500),
+            cap: Duration::from_secs(30),
+        }
+    }
+
+    // The delay doubles on every consecutive failure, jitter included: each pause stays
+    // inside +/-20 % of 500 ms * 2^n.
+    //
+    // Compared in whole milliseconds on purpose: `next_delay` builds the jitter with
+    // integer arithmetic (`* percent / 100`), so at percent = 80 it lands exactly on the
+    // lower bound. A float bound written as `expected.mul_f64(0.8)` would make the assert
+    // depend on f64 rounding of that very same boundary.
+    #[test]
+    fn backoff_doubles_on_consecutive_failures() {
+        let mut backoff = Backoff::new(test_backoff_config(), 0);
+        for attempt in 0..6u32 {
+            let expected_millis = 500u128 << attempt;
+            let lower = expected_millis * 80 / 100;
+            let upper = expected_millis * 120 / 100;
+            let delay_millis = backoff.next_delay().as_millis();
+            assert!(
+                delay_millis >= lower && delay_millis <= upper,
+                "attempt {attempt}: {delay_millis} ms is outside [{lower}, {upper}] ms"
+            );
+        }
+    }
+
+    // Growth stops at the configured ceiling, and the ceiling is hard: jitter may only
+    // pull a capped delay down, never above the maximum a user configured.
+    #[test]
+    fn backoff_never_exceeds_the_cap() {
+        let config = test_backoff_config();
+        let mut backoff = Backoff::new(config, 7);
+        let mut last = Duration::ZERO;
+        for _ in 0..40 {
+            last = backoff.next_delay();
+            assert!(
+                last <= config.cap,
+                "delay {last:?} exceeded cap {:?}",
+                config.cap
+            );
+        }
+        // Same integer comparison as above: at percent = 80 the value lands exactly on
+        // 80 % of the cap, so the bound must not go through f64.
+        assert!(
+            last.as_millis() >= config.cap.as_millis() * 80 / 100,
+            "tail delay {last:?} should sit at the cap"
+        );
+    }
+
+    // A healthy endpoint puts the task back at the base delay.
+    #[test]
+    fn backoff_reset_returns_to_the_base_delay() {
+        let mut backoff = Backoff::new(test_backoff_config(), 3);
+        for _ in 0..8 {
+            backoff.next_delay();
+        }
+        backoff.reset();
+        let delay = backoff.next_delay();
+        assert!(
+            delay >= Duration::from_millis(400) && delay <= Duration::from_millis(600),
+            "after reset the delay must be back at the base, got {delay:?}"
+        );
+    }
+
+    // Jitter that is identically zero would let the whole pool reconnect in one burst,
+    // which is the only reason jitter exists here.
+    #[test]
+    fn backoff_jitter_is_not_identically_zero() {
+        let config = test_backoff_config();
+        let delays: std::collections::BTreeSet<Duration> = (0..16u64)
+            .map(|seed| Backoff::new(config, seed).next_delay())
+            .collect();
+        assert!(
+            delays.len() >= 2,
+            "16 task indices produced one single delay: {delays:?}"
+        );
+    }
+
+    // Two tasks of the same round must not walk the same sequence.
+    #[test]
+    fn backoff_decorrelates_neighbouring_task_indices() {
+        let config = test_backoff_config();
+        let first: Vec<Duration> = (0..4)
+            .map(|_| Backoff::new(config, 1).next_delay())
+            .collect();
+        let mut a = Backoff::new(config, 1);
+        let mut b = Backoff::new(config, 2);
+        let sequence_a: Vec<Duration> = (0..4).map(|_| a.next_delay()).collect();
+        let sequence_b: Vec<Duration> = (0..4).map(|_| b.next_delay()).collect();
+        assert_eq!(first.len(), 4, "sanity: the helper produced four samples");
+        assert_ne!(
+            sequence_a, sequence_b,
+            "task 1 and task 2 retry in lockstep: {sequence_a:?}"
+        );
+    }
+
+    // The remote and the local counter of the same task are independent sequences.
+    #[test]
+    fn backoff_separates_remote_and_local_seeds() {
+        let config = test_backoff_config();
+        let mut remote = Backoff::new(config, 5);
+        let mut local = Backoff::new(config, 5 ^ LOCAL_BACKOFF_SEED_XOR);
+        let remote_delays: Vec<Duration> = (0..4).map(|_| remote.next_delay()).collect();
+        let local_delays: Vec<Duration> = (0..4).map(|_| local.next_delay()).collect();
+        assert_ne!(remote_delays, local_delays);
+    }
 
     // A connection that was alive while the tunnel sat idle, then dropped, must
     // not be reported as a long outage: refreshing health when the connection
