@@ -85,6 +85,8 @@ async fn main() -> Result<()> {
                 max_conn,
                 credential,
                 reregister_after: None,
+                reconnect_base_delay: None,
+                reconnect_max_delay: None,
             };
             let result = open_tunnel(config).await?;
             log::info!("Tunnel url: {:?}", result);
