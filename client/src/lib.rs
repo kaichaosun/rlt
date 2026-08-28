@@ -11,7 +11,7 @@ use tokio::io;
 use tokio::net::TcpStream;
 pub use tokio::sync::broadcast;
 use tokio::sync::{mpsc, Semaphore};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 pub const PROXY_SERVER: &str = "https://your-domain.com";
 pub const LOCAL_HOST: &str = "127.0.0.1";
@@ -21,6 +21,14 @@ const TCP_KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "windows"))]
 const TCP_KEEPALIVE_RETRIES: u32 = 5;
+
+/// How long a single connection attempt to the tunnel server may take.
+///
+/// Without a bound, connecting through an uplink that silently drops packets
+/// sits in the kernel's SYN retry budget for over two minutes. Since only a
+/// connect *error* counts as downtime, [`RoundHealth`] cannot even begin
+/// measuring toward re-registration until the attempt finally gives up.
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default for [`ClientConfig::reregister_after`]: how long the remote endpoint
 /// must be *continuously* unreachable before we re-register. Time-based rather
@@ -308,14 +316,19 @@ async fn tunnel_one_connection(
     health: &RoundHealth,
 ) {
     log::debug!("Connecting to remote: {}:{}", server_host, server_port);
-    let remote_stream = match TcpStream::connect(format!("{server_host}:{server_port}")).await {
+    let addr = format!("{server_host}:{server_port}");
+    let connected = match timeout(REMOTE_CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
+        Ok(res) => res.map_err(|err| format!("{err:?}")),
+        Err(_) => Err(format!("timed out after {REMOTE_CONNECT_TIMEOUT:?}")),
+    };
+    let remote_stream = match connected {
         Ok(stream) => {
             health.record_success();
             stream
         }
         Err(err) => {
             let down_for = health.record_failure();
-            log::error!("Remote connect failed (down for {:?}): {:?}", down_for, err);
+            log::error!("Remote connect failed (down for {:?}): {}", down_for, err);
             sleep(Duration::from_secs(10)).await;
             return;
         }
