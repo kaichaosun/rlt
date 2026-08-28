@@ -62,6 +62,7 @@ cargo install localtunnel-server
 ```
 
 ```Rust
+use std::net::{IpAddr, Ipv4Addr};
 use localtunnel_server::{start, ServerConfig};
 
 let config = ServerConfig {
@@ -71,6 +72,9 @@ let config = ServerConfig {
     max_sockets: 10,
     proxy_port: 3001,
     require_auth: false,
+    // Loopback when a reverse proxy on the same host is the only client of the
+    // API and proxy ports. Endpoint ports always listen on all interfaces.
+    bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
 };
 
 start(config).await?

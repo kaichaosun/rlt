@@ -6,7 +6,10 @@
 extern crate lazy_static;
 
 use std::time::Duration;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use actix_web::{web, App, HttpServer};
 use anyhow::Result;
@@ -43,6 +46,15 @@ pub struct ServerConfig {
     pub max_sockets: u8,
     pub proxy_port: u16,
     pub require_auth: bool,
+    /// Address the API and proxy ports listen on.
+    ///
+    /// Set this to a loopback address when a reverse proxy on the same host is
+    /// the only thing that should reach them: both ports are management
+    /// interfaces, and exposing them lets anyone register an endpoint or reach
+    /// a tunnelled app without going through the proxy. The per-tunnel endpoint
+    /// ports are unaffected and always listen on all interfaces, since tunnel
+    /// clients connect to those directly.
+    pub bind: IpAddr,
 }
 
 /// Start the proxy use low level api from hyper.
@@ -55,12 +67,14 @@ pub async fn start(config: ServerConfig) -> Result<()> {
         max_sockets,
         proxy_port,
         require_auth,
+        bind,
     } = config;
-    log::info!("Api server listens at {} {}", &domain, api_port);
+    log::info!("Api server listens at {} {} on {}", &domain, api_port, bind);
     log::info!(
-        "Start proxy server at {} {}, options: {} {}, require auth: {}",
+        "Start proxy server at {} {} on {}, options: {} {}, require auth: {}",
         &domain,
         proxy_port,
+        bind,
         secure,
         max_sockets,
         require_auth
@@ -75,7 +89,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
         domain,
     });
 
-    let proxy_addr: SocketAddr = ([0, 0, 0, 0], proxy_port).into();
+    let proxy_addr = SocketAddr::new(bind, proxy_port);
     let listener = TcpListener::bind(proxy_addr).await?;
     tokio::spawn(async move {
         loop {
@@ -112,7 +126,7 @@ pub async fn start(config: ServerConfig) -> Result<()> {
             .service(api_status)
             .service(request_endpoint)
     })
-    .bind(("0.0.0.0", api_port))?
+    .bind(SocketAddr::new(bind, api_port))?
     .run()
     .await?;
 

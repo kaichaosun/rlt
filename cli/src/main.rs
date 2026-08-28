@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use localtunnel_client::{broadcast, open_tunnel, ClientConfig};
@@ -56,6 +58,12 @@ enum Command {
         proxy_port: u16,
         #[clap(long)]
         require_auth: bool,
+        /// Address the API and proxy ports listen on. Use 127.0.0.1 when a
+        /// reverse proxy on the same host is their only client. The per-tunnel
+        /// endpoint ports always listen on all interfaces regardless, as that
+        /// is where tunnel clients connect.
+        #[clap(long, default_value = "0.0.0.0")]
+        bind: IpAddr,
     },
 }
 
@@ -99,6 +107,7 @@ async fn main() -> Result<()> {
             max_sockets,
             proxy_port,
             require_auth,
+            bind,
         } => {
             let config = ServerConfig {
                 domain,
@@ -107,6 +116,7 @@ async fn main() -> Result<()> {
                 max_sockets,
                 proxy_port,
                 require_auth,
+                bind,
             };
             start(config).await?;
         }
