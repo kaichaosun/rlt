@@ -94,6 +94,9 @@ impl Client {
     }
 
     pub async fn listen(&mut self) -> io::Result<u16> {
+        // Always all interfaces, whatever `ServerConfig::bind` says: this is
+        // the port the tunnel client dials in on, so it has to be reachable
+        // from wherever that client runs.
         let listener = TcpListener::bind("0.0.0.0:0").await?;
         let port = listener.local_addr()?.port();
         self.port = Some(port);
