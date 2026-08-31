@@ -5,8 +5,13 @@ use std::sync::{
 
 use localtunnel_client::{broadcast, open_tunnel, ClientConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration};
+
+// A bound on each wait rather than a deadline for the client to meet: every wait
+// below returns as soon as its condition holds, so a generous value costs a
+// passing run nothing.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn mock_api_server(listener: TcpListener, endpoint_port: Arc<AtomicU16>) {
     loop {
@@ -84,7 +89,7 @@ async fn reregistration_on_remote_failure() {
     open_tunnel(config).await.unwrap();
 
     // Phase 1: client connects to remote1
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(WAIT_TIMEOUT, async {
         while remote1_count.load(Ordering::Relaxed) == 0 {
             sleep(Duration::from_millis(50)).await;
         }
@@ -96,14 +101,38 @@ async fn reregistration_on_remote_failure() {
     endpoint_port.store(remote2_port, Ordering::Relaxed);
     remote1_task.abort();
 
+    // Wait for the aborted listener's port to really stop accepting before timing
+    // the client. On Windows it keeps completing connections for about two
+    // seconds after the task is aborted, against 0.2ms on Linux, and while it
+    // does the client's connects succeed — so there is genuinely nothing for it
+    // to detect yet. Folding that platform-dependent delay into the measurement
+    // below is what made this test fail on Windows CI about half the time.
+    tokio::time::timeout(WAIT_TIMEOUT, async {
+        while TcpStream::connect(("127.0.0.1", remote1_port))
+            .await
+            .is_ok()
+        {
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("remote1's port should stop accepting connections once it is aborted");
+
     // Phase 2: client detects the failure, re-registers, connects to remote2.
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(WAIT_TIMEOUT, async {
         while remote2_count.load(Ordering::Relaxed) == 0 {
             sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .expect("client should re-register and connect to remote2");
+    .unwrap_or_else(|_| {
+        panic!(
+            "client should re-register and connect to remote2 \
+             (remote1 accepted {}, remote2 accepted {})",
+            remote1_count.load(Ordering::Relaxed),
+            remote2_count.load(Ordering::Relaxed),
+        )
+    });
 
     let _ = shutdown_tx.send(());
 }
