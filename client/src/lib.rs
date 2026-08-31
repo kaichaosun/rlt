@@ -30,6 +30,15 @@ const TCP_KEEPALIVE_RETRIES: u32 = 5;
 /// measuring toward re-registration until the attempt finally gives up.
 const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a request for an endpoint may take.
+///
+/// `reqwest` applies no timeout of its own, so a server that accepts the
+/// connection and then stops answering — a captive portal, a half-dead uplink —
+/// would park the supervisor here indefinitely with the tunnel down and no
+/// further attempts being made. Generous enough to cover DNS, a TLS handshake
+/// and the server binding a listener before it replies.
+const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Default for [`ClientConfig::reregister_after`]: how long the remote endpoint
 /// must be *continuously* unreachable before we re-register. Time-based rather
 /// than failure-count based, so the trigger is independent of how many
@@ -380,7 +389,15 @@ async fn get_tunnel_endpoint(
     }
     log::info!("Request for assign domain: {}", uri);
 
-    let resp = reqwest::get(uri).await?.json::<ProxyResponse>().await?;
+    let client = reqwest::Client::builder()
+        .timeout(API_REQUEST_TIMEOUT)
+        .build()?;
+    let resp = client
+        .get(uri)
+        .send()
+        .await?
+        .json::<ProxyResponse>()
+        .await?;
     log::info!("Response from server: {:#?}", resp);
 
     let parts = resp.url.split("//").collect::<Vec<&str>>();
